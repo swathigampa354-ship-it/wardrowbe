@@ -32,24 +32,6 @@ function getSourceBadge(outfit: Outfit, t: any): {
   icon: React.ReactNode;
   className: string;
 } | null {
-  if (outfit.replaces_outfit_id) {
-    return {
-      label: t('replacement'),
-      icon: <RefreshCw className="h-3 w-3" />,
-      className: 'bg-orange-100 text-orange-700 border-orange-200',
-    };
-  }
-  if (
-    outfit.cloned_from_outfit_id &&
-    outfit.source === 'manual' &&
-    outfit.scheduled_for
-  ) {
-    return {
-      label: t('worn'),
-      icon: <BookmarkCheck className="h-3 w-3" />,
-      className: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-    };
-  }
   if (outfit.source === 'manual') {
     return {
       label: t('studio'),

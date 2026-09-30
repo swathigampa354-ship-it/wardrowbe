@@ -2,7 +2,6 @@
 
 import { Menu, Moon, Sun, LogOut } from 'lucide-react';
 import { useTheme } from 'next-themes';
-import { signOut } from 'next-auth/react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/hooks/use-auth';
@@ -22,9 +21,8 @@ export function Header({ onMenuClick }: HeaderProps) {
     setTheme(theme === 'dark' ? 'light' : 'dark');
   };
 
-  const handleLogout = () => {
-    signOut({ callbackUrl: '/login' });
-  };
+  // No logout in the trial: there is no login. Sign-out returns here if you
+  // re-enable REQUIRE_AUTH and the NextAuth flow.
 
   const getInitials = (name?: string | null) => {
     if (!name) return '?';
@@ -74,14 +72,6 @@ export function Header({ onMenuClick }: HeaderProps) {
             <span className="hidden text-sm font-semibold lg:block">
               {user?.display_name || t('userFallback')}
             </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleLogout}
-              aria-label={t('signOut')}
-            >
-              <LogOut className="h-5 w-5" />
-            </Button>
           </div>
         </div>
       </div>

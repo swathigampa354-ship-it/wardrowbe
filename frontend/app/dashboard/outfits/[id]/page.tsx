@@ -1,33 +1,34 @@
 'use client';
 
-import { useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useParams, useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
-import { format, formatDistanceToNow, parseISO } from 'date-fns';
-import {
-  BookmarkPlus,
-  CalendarPlus,
-  ChevronLeft,
-  Loader2,
-  Pencil,
-  Star,
-  Trash2,
-} from 'lucide-react';
+import { formatDistanceToNow, parseISO } from 'date-fns';
+import { ChevronLeft, Star, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { LineageCard } from '@/components/shared/lineage-card';
-import { CloneToLookbookDialog } from '@/components/shared/clone-to-lookbook-dialog';
-import { useDeleteOutfit, useOutfit, useOutfits } from '@/lib/hooks/use-outfits';
-import { useWearToday } from '@/lib/hooks/use-studio';
+import {
+  useAcceptOutfit,
+  useDeleteOutfit,
+  useOutfit,
+  useRejectOutfit,
+} from '@/lib/hooks/use-outfits';
 import { getErrorMessage } from '@/lib/api';
 
+/**
+ * Outfit detail.
+ *
+ * The full product reached this page through the lookbook: a lineage card, a
+ * "wear today" clone, and a list of every day a template was worn. Cloning is
+ * the studio's job and the studio is not in the trial, so what is left here is
+ * the outfit itself - its items, the AI's reasoning, and the accept/reject
+ * actions the suggestion loop is actually built on.
+ */
 export default function OutfitDetailPage() {
   const t = useTranslations('outfits');
   const tc = useTranslations('common');
@@ -37,19 +38,8 @@ export default function OutfitDetailPage() {
 
   const { data: outfit, isLoading } = useOutfit(outfitId);
   const deleteMutation = useDeleteOutfit();
-  const wearTodayMutation = useWearToday(outfitId ?? '');
-
-  const [cloneDialogOpen, setCloneDialogOpen] = useState(false);
-
-  const isTemplate =
-    outfit !== undefined && outfit !== null && outfit.scheduled_for === null;
-  const isWorn = !!outfit?.feedback?.worn_at;
-
-  const { data: wearInstancesData } = useOutfits(
-    isTemplate && outfitId ? { cloned_from_outfit_id: outfitId } : {},
-    1,
-    10
-  );
+  const acceptMutation = useAcceptOutfit();
+  const rejectMutation = useRejectOutfit();
 
   if (isLoading || !outfit) {
     return (
@@ -59,16 +49,6 @@ export default function OutfitDetailPage() {
       </div>
     );
   }
-
-  const handleWearToday = async () => {
-    try {
-      const result = await wearTodayMutation.mutateAsync({});
-      toast.success(t('detail.addedToToday'));
-      router.push(`/dashboard/outfits/${result.id}`);
-    } catch (error) {
-      toast.error(getErrorMessage(error, t('detail.wearTodayError')));
-    }
-  };
 
   const handleDelete = async () => {
     if (!confirm(t('detail.deleteConfirm'))) return;
@@ -81,10 +61,21 @@ export default function OutfitDetailPage() {
     }
   };
 
+  const decide = async (accepted: boolean) => {
+    try {
+      await (accepted ? acceptMutation : rejectMutation).mutateAsync(outfit.id);
+      toast.success(accepted ? t('cards.accepted') : t('cards.rejectedToast'));
+    } catch (error) {
+      toast.error(getErrorMessage(error, t('loadError')));
+    }
+  };
+
   const title =
     outfit.name ||
     outfit.reasoning ||
     t('cards.outfitFallback', { occasion: outfit.occasion });
+
+  const isPending = outfit.status === 'pending' || outfit.status === 'sent';
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -106,12 +97,15 @@ export default function OutfitDetailPage() {
           <Badge variant="outline" className="capitalize">
             {outfit.source.replace('_', ' ')}
           </Badge>
+          <Badge variant={outfit.status === 'accepted' ? 'default' : 'secondary'}>
+            {outfit.status}
+          </Badge>
           <span className="text-sm text-muted-foreground">
             {outfit.scheduled_for
               ? formatDistanceToNow(parseISO(outfit.scheduled_for), {
                   addSuffix: true,
                 })
-              : t('detail.lookbookTemplate')}
+              : t('detail.undated')}
           </span>
         </div>
 
@@ -144,10 +138,7 @@ export default function OutfitDetailPage() {
             </p>
           </div>
         )}
-
       </div>
-
-      <LineageCard outfit={outfit} />
 
       <Card>
         <CardContent className="p-4">
@@ -158,7 +149,7 @@ export default function OutfitDetailPage() {
             {outfit.items.map((item) => (
               <Link
                 key={item.id}
-                href={`/dashboard/wardrobe?itemId=${item.id}`}
+                href={`/dashboard/wardrobe?item=${item.id}`}
                 className="group"
               >
                 <div className="relative aspect-square rounded-lg overflow-hidden border bg-muted">
@@ -172,9 +163,7 @@ export default function OutfitDetailPage() {
                     />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center">
-                      <span className="text-xs text-muted-foreground">
-                        {item.type}
-                      </span>
+                      <span className="text-xs text-muted-foreground">{item.type}</span>
                     </div>
                   )}
                 </div>
@@ -187,30 +176,48 @@ export default function OutfitDetailPage() {
         </CardContent>
       </Card>
 
-      <div className="flex flex-wrap gap-2">
-        {isTemplate && (
-          <Button onClick={handleWearToday} disabled={wearTodayMutation.isPending}>
-            {wearTodayMutation.isPending ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            ) : (
-              <CalendarPlus className="h-4 w-4 mr-2" />
+      {(outfit.feedback?.rating || outfit.feedback?.comment) && (
+        <Card>
+          <CardContent className="p-4 space-y-1.5">
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              {t('detail.feedbackTitle')}
+            </h2>
+            {outfit.feedback.rating && (
+              <div className="flex items-center gap-1 text-sm">
+                <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                {outfit.feedback.rating} / 5
+              </div>
             )}
-            {t('detail.wearToday')}
-          </Button>
-        )}
-        {!isTemplate && (
-          <Button variant="outline" onClick={() => setCloneDialogOpen(true)}>
-            <BookmarkPlus className="h-4 w-4 mr-2" />
-            {t('detail.saveToLookbook')}
-          </Button>
-        )}
-        {!isWorn && (
-          <Button variant="outline" asChild>
-            <Link href={`/dashboard/outfits/new?edit=${outfit.id}`}>
-              <Pencil className="h-4 w-4 mr-2" />
-              {tc('edit')}
-            </Link>
-          </Button>
+            {outfit.feedback.comment && (
+              <p className="text-sm text-muted-foreground break-words">
+                {outfit.feedback.comment}
+              </p>
+            )}
+            {outfit.feedback.worn_at && (
+              <p className="text-xs text-muted-foreground">
+                {t('detail.wornOn', { date: outfit.feedback.worn_at })}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        {isPending && (
+          <>
+            <Button onClick={() => decide(true)} disabled={acceptMutation.isPending}>
+              <ThumbsUp className="h-4 w-4 mr-2" />
+              {t('cards.accept')}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => decide(false)}
+              disabled={rejectMutation.isPending}
+            >
+              <ThumbsDown className="h-4 w-4 mr-2" />
+              {t('cards.rejected')}
+            </Button>
+          </>
         )}
         <Button
           variant="outline"
@@ -222,62 +229,6 @@ export default function OutfitDetailPage() {
           {tc('delete')}
         </Button>
       </div>
-
-      {isTemplate && wearInstancesData && wearInstancesData.total > 0 && (
-        <Card>
-          <CardContent className="p-4">
-            <h2 className="text-sm font-semibold text-muted-foreground mb-3 uppercase tracking-wide">
-              {t('detail.wornCount', { count: wearInstancesData.total })}
-            </h2>
-            <div className="space-y-2">
-              {wearInstancesData.outfits.map((wear) => (
-                <Link
-                  key={wear.id}
-                  href={`/dashboard/outfits/${wear.id}`}
-                  className="flex items-center justify-between rounded-lg border px-3 py-2 hover:bg-muted/50"
-                >
-                  <span className="text-sm">
-                    {wear.scheduled_for
-                      ? format(parseISO(wear.scheduled_for), 'MMM d, yyyy')
-                      : t('detail.undated')}
-                  </span>
-                  {wear.feedback?.rating && (
-                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
-                      {wear.feedback.rating}
-                    </div>
-                  )}
-                </Link>
-              ))}
-            </div>
-            {wearInstancesData.has_more && (
-              <Button variant="link" size="sm" asChild className="mt-2 px-0">
-                <Link href={`/dashboard/outfits?filter=worn&cloned_from=${outfit.id}`}>
-                  {t('detail.seeAll')}
-                </Link>
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {isTemplate && wearInstancesData && wearInstancesData.total === 0 && (
-        <Alert className="border-muted">
-          <AlertDescription className="text-sm text-muted-foreground">
-            {t('detail.notWornYet')}
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {!isTemplate && (
-        <CloneToLookbookDialog
-          open={cloneDialogOpen}
-          sourceOutfitId={outfit.id}
-          sourceOccasion={outfit.occasion}
-          onClose={() => setCloneDialogOpen(false)}
-          onSuccess={(newId) => router.push(`/dashboard/outfits/${newId}`)}
-        />
-      )}
     </div>
   );
 }

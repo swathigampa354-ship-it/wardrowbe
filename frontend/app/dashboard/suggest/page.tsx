@@ -4,7 +4,6 @@ import { useState, useEffect, Suspense } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useSession } from 'next-auth/react';
 import { useTranslations } from 'next-intl';
 import {
   Briefcase,
@@ -623,7 +622,6 @@ function SuggestContent() {
   const searchParams = useSearchParams();
   const preselectedItemId = searchParams.get('item');
   const { data: preselectedItem } = useItem(preselectedItemId || '');
-  const { data: session } = useSession();
   const { data: weather, isLoading: weatherLoading } = useWeather();
   const { data: prefs } = usePreferences();
   const temperatureUnit: TempUnit = prefs?.temperature_unit === 'fahrenheit' ? 'fahrenheit' : 'celsius';
@@ -654,10 +652,6 @@ function SuggestContent() {
 
   const handleGenerate = async () => {
     if (!selectedOccasion) return;
-
-    if (session?.accessToken) {
-      setAccessToken(session.accessToken as string);
-    }
 
     setIsGenerating(true);
     setError(null);
@@ -697,10 +691,6 @@ function SuggestContent() {
     const outfitToAccept = targetOutfit || outfits[activeOptionIndex];
     if (!outfitToAccept) return;
 
-    if (session?.accessToken) {
-      setAccessToken(session.accessToken as string);
-    }
-
     try {
       await api.post(`/outfits/${outfitToAccept.id}/accept`);
       // Every look was already persisted, so the ones left over are marked skipped rather
@@ -723,10 +713,6 @@ function SuggestContent() {
   const handleReject = async (targetOutfit?: Outfit) => {
     const outfitToReject = targetOutfit || outfits[activeOptionIndex];
     if (!outfitToReject) return;
-
-    if (session?.accessToken) {
-      setAccessToken(session.accessToken as string);
-    }
 
     try {
       await api.post(`/outfits/${outfitToReject.id}/reject`);

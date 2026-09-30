@@ -9,7 +9,6 @@ import { MobileSidebar } from '@/components/mobile-sidebar';
 import { MobileNav } from '@/components/mobile-nav';
 import { Header } from '@/components/header';
 import { OfflineIndicator } from '@/components/offline-indicator';
-import { UploadQueueIndicator } from '@/components/upload-queue-indicator';
 import { ImageLightbox } from '@/components/image-lightbox';
 import { LightboxProvider } from '@/lib/lightbox-context';
 import { useAuth } from '@/lib/hooks/use-auth';
@@ -26,10 +25,9 @@ export default function DashboardLayout({
   const { user, isAuthenticated, isLoading, error } = useAuth();
 
   useEffect(() => {
-    // If auth check completed and user is not authenticated, redirect to login
-    if (!isLoading && !isAuthenticated) {
-      router.push('/login');
-    }
+    // Trial build: the API serves a single implicit demo user, so there is no
+    // login gate here. If you set REQUIRE_AUTH=true on the server, point this
+    // at /login again (the dev-credentials NextAuth flow still exists).
   }, [isLoading, isAuthenticated, router]);
 
   // Check onboarding status from API user
@@ -50,10 +48,6 @@ export default function DashboardLayout({
     );
   }
 
-  if (!isAuthenticated) {
-    return null;
-  }
-
   return (
     <LightboxProvider>
       <div className="min-h-screen bg-background">
@@ -67,7 +61,6 @@ export default function DashboardLayout({
         </div>
         <MobileNav />
         <OfflineIndicator />
-        <UploadQueueIndicator />
         <ImageLightbox />
       </div>
     </LightboxProvider>

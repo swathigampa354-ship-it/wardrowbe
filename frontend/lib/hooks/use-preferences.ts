@@ -1,79 +1,74 @@
 'use client';
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useSession } from 'next-auth/react';
-import { api, setAccessToken } from '@/lib/api';
-import { Preferences } from '@/lib/types';
+/**
+ * Preferences for the trial build.
+ *
+ * The original hit a dedicated /users/me/preferences table with 11 settings
+ * (style profile, temperature thresholds, AI endpoint rotation, variety
+ * levels...). The trial has no such table: the two values the UI actually
+ * reads — the unit for weather and the default occasion for suggestions — live
+ * on the user row, which the API already exposes at /users/me.
+ */
 
-function useSetTokenIfAvailable() {
-  const { data: session } = useSession();
-  if (session?.accessToken) {
-    setAccessToken(session.accessToken as string);
-  }
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { api } from '@/lib/api';
+
+export interface TrialPreferences {
+  default_occasion: string;
+  temperature_unit: 'celsius' | 'fahrenheit';
 }
 
-export function usePreferences() {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
+export const DEFAULT_PREFERENCES: TrialPreferences = {
+  default_occasion: 'casual',
+  temperature_unit: 'celsius',
+};
 
-  return useQuery({
+export function usePreferences() {
+  return useQuery<TrialPreferences>({
     queryKey: ['preferences'],
-    queryFn: () => api.get<Preferences>('/users/me/preferences'),
-    enabled: status !== 'loading',
+    queryFn: async () => {
+      const me = await api.get<{ default_occasion: string | null; temperature_unit: string | null }>(
+        '/users/me'
+      );
+      return {
+        default_occasion: me.default_occasion || DEFAULT_PREFERENCES.default_occasion,
+        temperature_unit: me.temperature_unit === 'fahrenheit' ? 'fahrenheit' : 'celsius',
+      };
+    },
+    staleTime: 5 * 60 * 1000,
   });
 }
 
 export function useUpdatePreferences() {
   const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
   return useMutation({
-    mutationFn: (data: Partial<Preferences>) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.patch<Preferences>('/users/me/preferences', data);
-    },
+    mutationFn: (data: Partial<TrialPreferences>) => api.patch('/users/me', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['preferences'] });
+      queryClient.invalidateQueries({ queryKey: ['user'] });
     },
   });
 }
 
 export function useResetPreferences() {
   const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
   return useMutation({
-    mutationFn: () => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.post<Preferences>('/users/me/preferences/reset');
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['preferences'] });
-    },
+    mutationFn: () =>
+      api.patch('/users/me', {
+        default_occasion: DEFAULT_PREFERENCES.default_occasion,
+        temperature_unit: DEFAULT_PREFERENCES.temperature_unit,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['preferences'] }),
   });
 }
 
-interface AITestResult {
-  status: 'connected' | 'error';
-  available_models?: string[];
-  vision_models?: string[];
-  text_models?: string[];
-  error?: string;
-}
-
+/** Not available in the trial: AI endpoints are configured by server env vars. */
 export function useTestAIEndpoint() {
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: (url: string) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.post<AITestResult>('/users/me/preferences/test-ai-endpoint', { url });
-    },
+  return useMutation<{ ok: boolean; message: string }, Error, unknown>({
+    mutationFn: async () => ({
+      ok: false,
+      message:
+        'The trial configures the AI provider with server environment variables (AI_BASE_URL, AI_MODEL, AI_API_KEY).',
+    }),
   });
 }

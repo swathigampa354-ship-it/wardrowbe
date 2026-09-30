@@ -1,16 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSession } from 'next-auth/react';
-import { api, setAccessToken } from '@/lib/api';
-import { FamilyRating } from '@/lib/types';
+import { api } from '@/lib/api';
 
 // Helper to set token if available (for NextAuth mode)
-function useSetTokenIfAvailable() {
-  const { data: session } = useSession();
-  if (session?.accessToken) {
-    setAccessToken(session.accessToken as string);
-  }
-}
-
 export interface OutfitItem {
   id: string;
   type: string;
@@ -26,20 +17,11 @@ export interface OutfitItem {
   position: number;
 }
 
-export interface WoreInsteadItem {
-  id: string;
-  type: string;
-  name: string | null;
-  thumbnail_path: string | null;
-  thumbnail_url?: string;
-}
-
 export interface FeedbackSummary {
   rating: number | null;
   comment: string | null;
   worn_at: string | null;
   actually_worn: boolean | null;
-  wore_instead_items: WoreInsteadItem[] | null;
 }
 
 export type OutfitSource = 'scheduled' | 'on_demand' | 'manual' | 'pairing' | 'external';
@@ -51,8 +33,6 @@ export interface Outfit {
   status: 'pending' | 'sent' | 'viewed' | 'accepted' | 'rejected' | 'skipped' | 'expired';
   source: OutfitSource;
   name: string | null;
-  replaces_outfit_id: string | null;
-  cloned_from_outfit_id: string | null;
   reasoning: string | null;
   style_notes: string | null;
   season: string | null;
@@ -63,9 +43,6 @@ export interface Outfit {
   weather: Record<string, unknown> | null;
   items: OutfitItem[];
   feedback: FeedbackSummary | null;
-  family_ratings: FamilyRating[] | null;
-  family_rating_average: number | null;
-  family_rating_count: number | null;
   is_starter_suggestion?: boolean;
   created_at: string;
 }
@@ -84,11 +61,7 @@ export interface OutfitFilters {
   date_from?: string;
   date_to?: string;
   source?: string;
-  is_lookbook?: boolean;
-  is_replacement?: boolean;
-  has_source_item?: boolean;
   search?: string;
-  cloned_from_outfit_id?: string;
 }
 
 export interface FeedbackData {
@@ -98,10 +71,7 @@ export interface FeedbackData {
   style_rating?: number;
   comment?: string;
   worn?: boolean;
-  worn_with_modifications?: boolean;
-  modification_notes?: string;
   actually_worn?: boolean;
-  wore_instead_items?: string[];
 }
 
 export interface FeedbackResponse {
@@ -121,8 +91,6 @@ export interface FeedbackResponse {
 }
 
 export function useOutfits(filters: OutfitFilters = {}, page = 1, pageSize = 20) {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
 
   const params: Record<string, string> = {
     page: String(page),
@@ -134,30 +102,20 @@ export function useOutfits(filters: OutfitFilters = {}, page = 1, pageSize = 20)
   if (filters.date_from) params.date_from = filters.date_from;
   if (filters.date_to) params.date_to = filters.date_to;
   if (filters.source) params.source = filters.source;
-  if (filters.is_lookbook !== undefined) params.is_lookbook = String(filters.is_lookbook);
-  if (filters.is_replacement !== undefined)
-    params.is_replacement = String(filters.is_replacement);
-  if (filters.has_source_item !== undefined)
-    params.has_source_item = String(filters.has_source_item);
   if (filters.search) params.search = filters.search;
-  if (filters.cloned_from_outfit_id)
-    params.cloned_from_outfit_id = filters.cloned_from_outfit_id;
 
   return useQuery({
     queryKey: ['outfits', filters, page, pageSize],
     queryFn: () => api.get<OutfitListResponse>('/outfits', { params }),
-    enabled: status !== 'loading',
   });
 }
 
 export function useOutfit(outfitId: string | undefined) {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
 
   return useQuery({
     queryKey: ['outfit', outfitId],
     queryFn: () => api.get<Outfit>(`/outfits/${outfitId}`),
-    enabled: !!outfitId && status !== 'loading',
+    enabled: !!outfitId,
   });
 }
 
@@ -238,13 +196,9 @@ export interface BulkOutfitOperationParams {
 
 export function useBulkDeleteOutfits() {
   const queryClient = useQueryClient();
-  const { data: session } = useSession();
 
   return useMutation({
     mutationFn: async (params: BulkOutfitOperationParams) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
       return api.post<BulkDeleteOutfitsResponse>('/outfits/bulk/delete', params);
     },
     onMutate: async (params) => {
@@ -293,8 +247,6 @@ export function useBulkDeleteOutfits() {
 }
 
 export function useCalendarOutfits(year: number, month: number, filters: OutfitFilters = {}) {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
 
   // Calculate date range for the month
   const date_from = `${year}-${String(month).padStart(2, '0')}-01`;
@@ -314,13 +266,10 @@ export function useCalendarOutfits(year: number, month: number, filters: OutfitF
   return useQuery({
     queryKey: ['calendarOutfits', year, month, filters],
     queryFn: () => api.get<OutfitListResponse>('/outfits', { params }),
-    enabled: status !== 'loading',
   });
 }
 
 export function usePendingOutfits(limit = 3) {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
 
   const params: Record<string, string> = {
     page: '1',
@@ -331,66 +280,5 @@ export function usePendingOutfits(limit = 3) {
   return useQuery({
     queryKey: ['pendingOutfits', limit],
     queryFn: () => api.get<OutfitListResponse>('/outfits', { params }),
-    enabled: status !== 'loading',
-  });
-}
-
-// --- Family rating hooks ---
-
-export function useSubmitFamilyRating() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({ outfitId, rating, comment }: { outfitId: string; rating: number; comment?: string }) =>
-      api.post<FamilyRating>(`/outfits/${outfitId}/family-rating`, { rating, comment }),
-    onSuccess: (_, { outfitId }) => {
-      queryClient.invalidateQueries({ queryKey: ['outfits'] });
-      queryClient.invalidateQueries({ queryKey: ['outfit', outfitId] });
-      queryClient.invalidateQueries({ queryKey: ['familyRatings', outfitId] });
-      queryClient.invalidateQueries({ queryKey: ['calendarOutfits'] });
-      queryClient.invalidateQueries({ queryKey: ['familyOutfits'] });
-    },
-  });
-}
-
-export function useFamilyRatings(outfitId: string | undefined) {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
-
-  return useQuery({
-    queryKey: ['familyRatings', outfitId],
-    queryFn: () => api.get<FamilyRating[]>(`/outfits/${outfitId}/family-ratings`),
-    enabled: !!outfitId && status !== 'loading',
-  });
-}
-
-export function useDeleteFamilyRating() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (outfitId: string) => api.delete<void>(`/outfits/${outfitId}/family-rating`),
-    onSuccess: (_, outfitId) => {
-      queryClient.invalidateQueries({ queryKey: ['outfits'] });
-      queryClient.invalidateQueries({ queryKey: ['outfit', outfitId] });
-      queryClient.invalidateQueries({ queryKey: ['familyRatings', outfitId] });
-      queryClient.invalidateQueries({ queryKey: ['familyOutfits'] });
-    },
-  });
-}
-
-export function useFamilyOutfits(memberId: string | undefined, page = 1, pageSize = 20) {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
-
-  const params: Record<string, string> = {
-    page: String(page),
-    page_size: String(pageSize),
-    family_member_id: memberId || '',
-  };
-
-  return useQuery({
-    queryKey: ['familyOutfits', memberId, page, pageSize],
-    queryFn: () => api.get<OutfitListResponse>('/outfits', { params }),
-    enabled: !!memberId && status !== 'loading',
   });
 }

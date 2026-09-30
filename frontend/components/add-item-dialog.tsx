@@ -35,7 +35,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { useCreateItem, useBulkCreateItems, BulkUploadResponse } from '@/lib/hooks/use-items';
+import { Badge } from '@/components/ui/badge';
+import { useCreateItem, useBulkCreateItems } from '@/lib/hooks/use-items';
+import { BulkUploadResponse } from '@/lib/types';
 import { useClothingTypes, useClothingColors } from '@/lib/hooks/use-translated-constants';
 import { useTranslations } from 'next-intl';
 
@@ -160,28 +162,17 @@ export function AddItemDialog({ open, onOpenChange }: AddItemDialogProps) {
         skipAi,
       });
 
-      if (result.staged > 0) {
-        toast.success(t('bulk.queued', { count: result.staged }));
-      }
-
-      if (result.unprotected) {
-        // These files couldn't be durably staged and went through today's
-        // direct upload path instead - it already has a real result to show,
-        // same results screen as before.
-        const { successful, failed } = result.unprotected;
-        if (failed === 0) {
-          toast.success(t('bulk.allSuccess', { count: successful }));
-        } else if (successful === 0) {
-          toast.error(t('bulk.allFailed', { count: failed }));
-        } else {
-          toast.warning(t('bulk.partial', { success: successful, failed }));
-        }
-        setBulkResult(result.unprotected);
+      const { successful, failed } = result;
+      if (failed === 0) {
+        toast.success(t('bulk.allSuccess', { count: successful }));
+      } else if (successful === 0) {
+        toast.error(t('bulk.allFailed', { count: failed }));
       } else {
-        // Everything was staged - nothing to review synchronously, the
-        // dashboard-wide upload indicator now owns reporting progress.
-        handleClose();
+        toast.warning(t('bulk.partial', { success: successful, failed }));
       }
+      // Uploads are synchronous in the trial, so the review screen below can
+      // show what the AI made of each file right away.
+      setBulkResult(result);
     } catch (error) {
       console.error('Failed to bulk upload:', error);
       toast.error(t('bulk.uploadError'));
@@ -562,8 +553,10 @@ export function AddItemDialog({ open, onOpenChange }: AddItemDialogProps) {
                             <p className="text-xs text-destructive">{result.error}</p>
                           )}
                         </div>
-                        {result.item && (
-                          <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                        {result.item_id && result.type && (
+                          <Badge variant="outline" className="text-xs shrink-0 capitalize">
+                            {result.type}
+                          </Badge>
                         )}
                       </div>
                     ))}
