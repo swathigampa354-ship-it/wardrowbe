@@ -1,0 +1,4 @@
+# Add this when DATABASE_URL points at PostgreSQL (Render's free Postgres):
+#   pip install -r requirements.txt -r requirements-postgres.txt
+# SQLite (the default) needs no extra driver.
+asyncpg>=0.29

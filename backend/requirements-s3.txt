@@ -1,0 +1,4 @@
+# Add this when you want uploaded photos to survive restarts, using any
+# S3-compatible bucket (Cloudflare R2, Backblaze B2, MinIO, AWS S3):
+#   pip install -r requirements.txt -r requirements-s3.txt
+boto3>=1.34

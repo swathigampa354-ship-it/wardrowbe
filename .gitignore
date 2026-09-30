@@ -1,67 +1,22 @@
-# Dependencies
-node_modules/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 .venv/
 venv/
-
-# Build outputs
-.next/
-dist/
-build/
-*.egg-info/
-*.tsbuildinfo
-
-# Environment and secrets
+frontend/node_modules/
+frontend/.next/
+frontend/tsconfig.tsbuildinfo
+frontend/next-env.d.ts
+storage/
+*.db
+*.db-shm
+*.db-wal
 .env
 .env.local
-.env.production
-.env.*.local
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# OS
 .DS_Store
-Thumbs.db
-
-# Logs
 *.log
-logs/
 
-# Cache
-.cache/
-.pytest_cache/
-.mypy_cache/
-.fastembed_cache/
-
-# Test coverage
-coverage/
-htmlcov/
-.coverage
-
-# Docker volumes (if any local paths are used)
-postgres_data/
-redis_data/
-uploads/
-
-# Kubernetes secrets (NEVER commit actual secrets)
-k8s/secrets.yaml.local
-k8s/*.secret.yaml
-
-# Local development
-*.local
-.claude/
-.serena/
-CLAUDE.md
-deploy.sh
-screenshots/
-.scope.md
-.mcp.json
-testing/
-.playwright-mcp
-*.review.yml
-*-test.yml
+# build artifacts that must not be committed
+frontend/tsconfig.tsbuildinfo

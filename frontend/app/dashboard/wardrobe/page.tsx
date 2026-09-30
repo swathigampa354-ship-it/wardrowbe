@@ -24,11 +24,17 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { AddItemDialog } from '@/components/add-item-dialog';
-import { AnalysisQueuePanel } from '@/components/analysis-queue-panel';
 import { ItemDetailDialog } from '@/components/item-detail-dialog';
 import { BulkActionToolbar, BulkSelection } from '@/components/bulk-action-toolbar';
-import { useItems, useItem, useItemTypes, useReanalyzeItem, useCancelAnalysis, useBulkDeleteItems, useBulkReanalyzeItems, useBulkCancelAnalysis, useBulkRotateItems, useBulkRemoveBackgroundItems, useRemoveBackground, useTaggingProgress, BulkOperationParams, tagProcessingLabel, formatAnalyzingElapsed, deriveQueueSummary } from '@/lib/hooks/use-items';
-import { useUserProfile } from '@/lib/hooks/use-user';
+import {
+  useItems,
+  useItem,
+  useItemTypes,
+  useReanalyzeItem,
+  useBulkDeleteItems,
+  BulkOperationParams,
+  tagProcessingLabel,
+} from '@/lib/hooks/use-items';
 import { Item } from '@/lib/types';
 import { useClothingTypes, useClothingColors, useSubtypeLabel } from '@/lib/hooks/use-translated-constants';
 import { toast } from 'sonner';
@@ -58,8 +64,6 @@ function ItemCard({
   selected,
   onSelect,
   onRetry,
-  onRetryBackgroundRemoval,
-  onCancelAnalysis,
   onClick,
   onDismissError,
   errorDismissed,
@@ -69,8 +73,6 @@ function ItemCard({
   selected: boolean;
   onSelect: (id: string, checked: boolean) => void;
   onRetry?: (id: string) => void;
-  onRetryBackgroundRemoval?: (id: string) => void;
-  onCancelAnalysis?: (id: string) => void;
   onClick?: () => void;
   onDismissError?: (id: string) => void;
   errorDismissed?: boolean;
@@ -83,11 +85,6 @@ function ItemCard({
   const colorInfo = clothingColors.find((c) => c.value === item.primary_color);
   const isProcessing = item.status === 'processing';
   const isError = item.status === 'error' && !errorDismissed;
-  const isBackgroundRemovalKind = item.processing_kind === 'background_removal';
-  const isRotateKind = item.processing_kind === 'rotate';
-  // Neither rotation nor background removal touches AI tagging, so their
-  // failures must not be reported as an analysis failure or offer its retry.
-  const isImageOpKind = isBackgroundRemovalKind || isRotateKind;
 
   const handleCheckboxClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -142,85 +139,38 @@ function ItemCard({
         {isProcessing && (
           <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center gap-2">
             <Loader2 className="h-6 w-6 text-white animate-spin" />
-            <span className="text-white text-xs font-medium">
-              {(() => {
-                const label = tagProcessingLabel(item);
-                if (label === 'removing_background') {
-                  return item.ai_started_at
-                    ? t('ai.removingBackgroundElapsed', {
-                        elapsed: formatAnalyzingElapsed(item.ai_started_at),
-                      })
-                    : t('ai.removeBackgroundQueued');
-                }
-                if (label === 'rotating') {
-                  return item.ai_started_at ? t('ai.rotating') : t('ai.rotateQueued');
-                }
-                return label === 'analyzing' && item.ai_started_at
-                  ? t('ai.analyzingElapsed', { elapsed: formatAnalyzingElapsed(item.ai_started_at) })
-                  : t('ai.queued');
-              })()}
-            </span>
-            {onCancelAnalysis && (
-              <Button
-                size="sm"
-                variant="secondary"
-                className="h-7 text-xs"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCancelAnalysis(item.id);
-                }}
-              >
-                <X className="h-3 w-3 mr-1" />
-                {tc('cancel')}
-              </Button>
-            )}
+            {/* Analysis is synchronous: a card is "processing" only while its own
+                upload request is still open (e.g. a slow AI provider). */}
+            <span className="text-white text-xs font-medium">{t('ai.analyzing')}</span>
           </div>
         )}
         {isError && (
           <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center gap-2 p-2">
             <AlertCircle className="h-6 w-6 text-red-400" />
-            <span className="text-white text-xs font-medium text-center">
-              {isBackgroundRemovalKind
-                ? t('ai.backgroundRemovalFailed')
-                : isRotateKind
-                  ? t('ai.rotateFailed')
-                  : t('ai.analysisFailed')}
-            </span>
-            {!isImageOpKind && item.ai_error && (
+            <span className="text-white text-xs font-medium text-center">{t('ai.analysisFailed')}</span>
+            {item.ai_error && (
               <span
-                className="text-white/70 text-[10px] text-center line-clamp-2 px-1"
+                className="text-white/70 text-[10px] text-center line-clamp-3 px-1"
                 title={item.ai_error}
               >
                 {item.ai_error}
               </span>
             )}
             <div className="flex gap-1.5">
-              {(() => {
-                // No retry for a failed rotation: the direction the user
-                // picked is not recorded anywhere, so a one-click retry would
-                // have to guess it and could turn the image the wrong way.
-                // They re-select and rotate again from the bulk toolbar.
-                const retry = isRotateKind
-                  ? undefined
-                  : isBackgroundRemovalKind
-                    ? onRetryBackgroundRemoval
-                    : onRetry;
-                if (!retry) return null;
-                return (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    className="h-7 text-xs"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      retry(item.id);
-                    }}
-                  >
-                    <RefreshCw className="h-3 w-3 mr-1" />
-                    {tc('retry')}
-                  </Button>
-                );
-              })()}
+              {onRetry && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-7 text-xs"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRetry(item.id);
+                  }}
+                >
+                  <RefreshCw className="h-3 w-3 mr-1" />
+                  {tc('retry')}
+                </Button>
+              )}
               {onDismissError && (
                 <Button
                   size="sm"
@@ -321,8 +271,9 @@ function EmptyWardrobe({ onAddClick }: { onAddClick: () => void }) {
 export default function WardrobePage() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { data: userProfile } = useUserProfile();
-  const userTimezone = userProfile?.timezone || 'UTC';
+  // The trial stores no per-user timezone (scheduling was removed), so relative
+  // "worn X days ago" labels are rendered in the browser's own timezone.
+  const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const t = useTranslations('wardrobe');
   const tc = useTranslations('common');
   const clothingTypes = useClothingTypes();
@@ -420,67 +371,36 @@ export default function WardrobePage() {
     typeFilter !== 'all',
   ].filter(Boolean).length;
 
-  // Fetch items with automatic polling (faster when items are processing)
+  // Analysis happens inside the upload request, so a plain fetch is enough;
+  // the hook still polls because an upload in another tab can leave a row
+  // "processing" for a moment.
   const { data, isLoading, error } = useItems(filters, page, pageSize);
-  const { data: taggingProgress } = useTaggingProgress();
   const { data: itemTypes } = useItemTypes();
   const reanalyze = useReanalyzeItem();
-  const cancelAnalysis = useCancelAnalysis();
   const bulkDelete = useBulkDeleteItems();
-  const bulkReanalyze = useBulkReanalyzeItems();
-  const bulkCancelAnalysis = useBulkCancelAnalysis();
-  const bulkRotate = useBulkRotateItems();
-  const bulkRemoveBackground = useBulkRemoveBackgroundItems();
-  const removeBackground = useRemoveBackground();
 
   const items = data?.items || [];
   const total = data?.total || 0;
 
-  // Get selected item: try from list first, then fetch individually (for deep-link from outfit pages)
+  // Get selected item: try from list first, then fetch individually (for deep-links
+  // coming from an outfit page).
   const listItem = detailItemId ? items.find((i) => i.id === detailItemId) || null : null;
   const { data: fetchedItem } = useItem(detailItemId && !listItem ? detailItemId : '');
   const detailItem = listItem || fetchedItem || null;
 
-  // Wardrobe-wide, from the server: counting the current page only capped the
-  // badge at the page size, so a 100-image upload still read "20 analyzing".
-  const queuedCount = taggingProgress?.queued ?? 0;
-  const analyzingCount = taggingProgress?.analyzing ?? 0;
-  // Failures come from the server for the same reason the other two do, but
-  // dismissal is keyed on `${id}:${updated_at}` and only the current page
-  // carries those versions, so off-page failures stay counted until seen.
-  const dismissedOnPage = items.filter(
-    (i) =>
-      i.status === 'error' &&
-      i.processing_kind !== 'background_removal' &&
-      i.processing_kind !== 'rotate' &&
-      dismissedErrors.has(`${i.id}:${i.updated_at}`)
-  ).length;
-  const errorCount = Math.max(0, (taggingProgress?.failed ?? 0) - dismissedOnPage);
-  const queueSummary = deriveQueueSummary(taggingProgress);
+  const errorCount = items.filter((i) => i.status === 'error').length;
+
+  const handleRetry = (itemId: string) => {
+    reanalyze.mutate(itemId, {
+      onError: (err) => toast.error(err.message || t('ai.retryError')),
+      onSuccess: () => toast.success(t('ai.reanalyzed')),
+    });
+  };
 
   // Clear selection when filters change (but not page - allow cross-page selection)
   useEffect(() => {
     setSelection({ mode: 'none', selectedIds: new Set(), excludedIds: new Set() });
   }, [search, typeFilter, needsWash, favoriteFilter, sortIndex]);
-
-  const handleRetry = (itemId: string) => {
-    reanalyze.mutate(itemId, {
-      onSuccess: (data) => {
-        if (data.status === 'cooldown' && data.retry_after_seconds) {
-          toast.info(t('ai.retryCooldown', { seconds: data.retry_after_seconds }));
-        }
-      },
-    });
-  };
-
-  const handleRetryBackgroundRemoval = (itemId: string) => {
-    removeBackground.mutate({ id: itemId });
-  };
-
-
-  const handleCancelAnalysis = (itemId: string) => {
-    cancelAnalysis.mutate(itemId);
-  };
 
   const handleDismissError = (itemId: string) => {
     const item = items.find((i) => i.id === itemId);
@@ -557,7 +477,7 @@ export default function WardrobePage() {
     const params = getBulkParams();
     try {
       const result = await bulkDelete.mutateAsync(params);
-      toast.success(t('bulkActions.deleteSuccess', { count: result.deleted }));
+      toast.success(t('bulkActions.deleteSuccess', { count: result.successful }));
       if (result.failed > 0) {
         toast.error(t('bulkActions.deletePartialFailed', { count: result.failed }));
       }
@@ -567,88 +487,9 @@ export default function WardrobePage() {
     }
   };
 
-  const handleBulkReanalyze = async () => {
-    const params = getBulkParams();
-    try {
-      const result = await bulkReanalyze.mutateAsync(params);
-      if (result.queued > 0) {
-        if (result.queued > 20) {
-          toast.success(t('bulkActions.reanalyzeMany', { count: result.queued }));
-        } else {
-          toast.success(t('bulkActions.reanalyzeQueued', { count: result.queued }));
-        }
-      }
-      if (result.skipped > 0) {
-        // A batch that's entirely already-processing must not read as a bare
-        // "0 items queued" success - surface the skip count explicitly.
-        toast.info(t('bulkActions.reanalyzeSkipped', { count: result.skipped }));
-      }
-      if (result.cooldown > 0) {
-        toast.info(t('bulkActions.reanalyzeCooldown', { count: result.cooldown }));
-      }
-      if (result.failed > 0) {
-        toast.error(t('bulkActions.reanalyzePartialFailed', { count: result.failed }));
-      }
-      handleClearSelection();
-    } catch {
-      toast.error(t('bulkActions.reanalyzeError'));
-    }
-  };
 
-  const handleCancelAllAnalysis = async () => {
-    try {
-      const result = await bulkCancelAnalysis.mutateAsync({ select_all: true });
-      if (result.cancelled > 0) {
-        toast.success(t('bulkActions.cancelAllQueued', { count: result.cancelled }));
-      }
-      if (result.errors.length > 0) {
-        toast.error(t('bulkActions.cancelAllError'));
-      }
-    } catch {
-      toast.error(t('bulkActions.cancelAllError'));
-    }
-  };
 
-  const handleBulkRotate = async (direction: 'cw' | 'ccw') => {
-    const params = getBulkParams();
-    try {
-      const result = await bulkRotate.mutateAsync({ ...params, direction });
-      if (result.queued > 0) {
-        toast.success(t('bulkActions.rotateQueued', { count: result.queued }));
-      }
-      if (result.skipped > 0) {
-        toast.info(t('bulkActions.rotateSkipped', { count: result.skipped }));
-      }
-      if (result.failed > 0) {
-        toast.error(t('bulkActions.rotatePartialFailed', { count: result.failed }));
-      }
-      handleClearSelection();
-    } catch {
-      toast.error(t('bulkActions.rotateError'));
-    }
-  };
 
-  const handleBulkRemoveBackground = async () => {
-    const params = getBulkParams();
-    try {
-      const result = await bulkRemoveBackground.mutateAsync(params);
-      if (result.queued > 0) {
-        toast.success(t('bulkActions.removeBackgroundQueued', { count: result.queued }));
-      }
-      if (result.skipped > 0) {
-        toast.info(t('bulkActions.removeBackgroundSkipped', { count: result.skipped }));
-      }
-      if (result.already_done > 0) {
-        toast.info(t('bulkActions.removeBackgroundAlreadyDone', { count: result.already_done }));
-      }
-      if (result.failed > 0) {
-        toast.error(t('bulkActions.removeBackgroundPartialFailed', { count: result.failed }));
-      }
-      handleClearSelection();
-    } catch {
-      toast.error(t('bulkActions.removeBackgroundError'));
-    }
-  };
 
   const handlePageChange = (newPage: number) => {
     setPage(newPage);
@@ -667,49 +508,12 @@ export default function WardrobePage() {
           <p className="text-sm text-muted-foreground">
             {t('itemCount', { count: total })}
           </p>
-          {(queuedCount > 0 || analyzingCount > 0 || errorCount > 0) && (
+          {errorCount > 0 && (
             <div className="flex items-center gap-2 mt-2">
-              {analyzingCount > 0 && (
-                <Badge variant="secondary" className="gap-1 text-xs">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  {queueSummary.batchTotal > 0
-                    ? t('ai.analyzingProgress', {
-                        count: analyzingCount,
-                        percent: queueSummary.percentComplete,
-                      })
-                    : t('ai.analyzingCount', { count: analyzingCount })}
-                </Badge>
-              )}
-              {queuedCount > 0 && (
-                <Badge variant="secondary" className="gap-1 text-xs">
-                  {t('ai.queuedCount', { count: queuedCount })}
-                </Badge>
-              )}
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-6 px-2 text-xs"
-                onClick={() => setQueuePanelOpen(true)}
-              >
-                {t('ai.queue.open')}
-              </Button>
-              {(queuedCount > 0 || analyzingCount > 0) && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 px-2 text-xs"
-                  disabled={bulkCancelAnalysis.isPending}
-                  onClick={handleCancelAllAnalysis}
-                >
-                  {t('ai.cancelAll')}
-                </Button>
-              )}
-              {errorCount > 0 && (
-                <Badge variant="destructive" className="gap-1 text-xs">
-                  <AlertCircle className="h-3 w-3" />
-                  {t('ai.failedCount', { count: errorCount })}
-                </Badge>
-              )}
+              <Badge variant="destructive" className="gap-1 text-xs">
+                <AlertCircle className="h-3 w-3" />
+                {t('ai.failedCount', { count: errorCount })}
+              </Badge>
             </div>
           )}
         </div>
@@ -914,8 +718,6 @@ export default function WardrobePage() {
                 selected={isSelected}
                 onSelect={handleSelect}
                 onRetry={handleRetry}
-                onRetryBackgroundRemoval={handleRetryBackgroundRemoval}
-                onCancelAnalysis={handleCancelAnalysis}
                 onClick={() => setDetailItemId(item.id)}
                 onDismissError={handleDismissError}
                 errorDismissed={dismissedErrors.has(`${item.id}:${item.updated_at}`)}
@@ -934,13 +736,7 @@ export default function WardrobePage() {
         onSelectAllMatching={handleSelectAllMatching}
         onClear={handleClearSelection}
         onDelete={handleBulkDelete}
-        onReanalyze={handleBulkReanalyze}
-        onRotate={handleBulkRotate}
-        onRemoveBackground={handleBulkRemoveBackground}
         isDeleting={bulkDelete.isPending}
-        isReanalyzing={bulkReanalyze.isPending}
-        isRotating={bulkRotate.isPending}
-        isRemovingBackground={bulkRemoveBackground.isPending}
         variant="items"
         page={page}
         pageSize={pageSize}
@@ -948,13 +744,6 @@ export default function WardrobePage() {
       />
 
       <AddItemDialog open={addDialogOpen} onOpenChange={setAddDialogOpen} />
-      <AnalysisQueuePanel
-        open={queuePanelOpen}
-        onOpenChange={setQueuePanelOpen}
-        progress={taggingProgress}
-        onRetry={handleRetry}
-        retryPending={reanalyze.isPending}
-      />
       <ItemDetailDialog
         item={detailItem}
         open={!!detailItemId}

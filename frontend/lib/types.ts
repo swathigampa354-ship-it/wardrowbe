@@ -427,3 +427,19 @@ export interface GeneratePairingsResponse {
   generated: number;
   pairings: Pairing[];
 }
+
+/* ---- trial: shapes the stripped backend returns ---- */
+export interface BulkUploadResult {
+  filename: string;
+  success: boolean;
+  item_id?: string | null;
+  error?: string | null;
+  type?: string | null;
+}
+
+export interface BulkUploadResponse {
+  total: number;
+  successful: number;
+  failed: number;
+  results: BulkUploadResult[];
+}

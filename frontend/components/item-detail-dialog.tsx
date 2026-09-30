@@ -60,12 +60,10 @@ import {
 import { Progress } from '@/components/ui/progress';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { toast } from 'sonner';
-import { useUpdateItem, useDeleteItem, useReanalyzeItem, useRotateImage, useRemoveBackground, useRestoreOriginal, useReplaceItemImage, useLogWash, useWashHistory, useItemWearStats, useItemWearHistory, useAddItemImage, useDeleteItemImage, useSetPrimaryImage } from '@/lib/hooks/use-items';
+import { useUpdateItem, useDeleteItem, useReanalyzeItem, useReplaceItemImage } from '@/lib/hooks/use-items';
 import { CLOTHING_SUBTYPES, Item } from '@/lib/types';
 import { useClothingTypes, useClothingColors, useSubtypeLabel } from '@/lib/hooks/use-translated-constants';
 import { ColorEyedropper } from '@/components/color-eyedropper';
-import { GeneratePairingsDialog } from '@/components/generate-pairings-dialog';
-import { useFeatures } from '@/lib/hooks/use-features';
 import { useTranslations } from 'next-intl';
 
 interface ItemDetailDialogProps {
@@ -112,7 +110,6 @@ export function ItemDetailDialog({ item, open, onOpenChange }: ItemDetailDialogP
   const subtypeLabel = useSubtypeLabel();
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [showPairingsDialog, setShowPairingsDialog] = useState(false);
   const [imageKey, setImageKey] = useState(0);
   const [editForm, setEditForm] = useState<EditForm>({
     name: '',
@@ -124,32 +121,16 @@ export function ItemDetailDialog({ item, open, onOpenChange }: ItemDetailDialogP
     favorite: false,
     wash_interval: undefined,
   });
-  const [showWashHistory, setShowWashHistory] = useState(false);
-  const [showWearHistory, setShowWearHistory] = useState(false);
-  const [activeImageIndex, setActiveImageIndex] = useState(0);
-
   const updateItem = useUpdateItem();
   const deleteItem = useDeleteItem();
   const reanalyzeItem = useReanalyzeItem();
-  const rotateImage = useRotateImage();
-  const removeBackground = useRemoveBackground();
-  const restoreOriginal = useRestoreOriginal();
   const replaceImage = useReplaceItemImage();
   const replaceImageInputRef = useRef<HTMLInputElement>(null);
-  const { data: features } = useFeatures();
-  const logWash = useLogWash();
-  const { data: washHistory } = useWashHistory(item?.id || '');
-  const { data: wearStats } = useItemWearStats(item?.id || '');
-  const { data: wearHistory } = useItemWearHistory(item?.id || '', 20);
-  const addImage = useAddItemImage();
-  const deleteImage = useDeleteItemImage();
-  const setPrimary = useSetPrimaryImage();
 
   useEffect(() => {
     if (item) {
       setEditForm(editFormFromItem(item));
       setIsEditing(false);
-      setActiveImageIndex(0);
     }
   }, [item?.id]);
 
@@ -174,16 +155,6 @@ export function ItemDetailDialog({ item, open, onOpenChange }: ItemDetailDialogP
       setIsEditing(false);
     } catch (error) {
       console.error('Failed to update item:', error);
-    }
-  };
-
-  const handleMarkWashed = async () => {
-    try {
-      await logWash.mutateAsync({ id: item.id });
-      toast.success(t('actions.washed'));
-    } catch (error) {
-      console.error('Failed to log wash:', error);
-      toast.error(t('actions.washError'));
     }
   };
 
@@ -216,46 +187,10 @@ export function ItemDetailDialog({ item, open, onOpenChange }: ItemDetailDialogP
 
   const handleReanalyze = async () => {
     try {
-      const result = await reanalyzeItem.mutateAsync(item.id);
-      if (result.status === 'cooldown' && result.retry_after_seconds) {
-        toast.info(tw('ai.retryCooldown', { seconds: result.retry_after_seconds }));
-      }
-      // Otherwise status will update to 'processing' and UI will reflect it
+      await reanalyzeItem.mutateAsync(item.id);
+      toast.success(tw('ai.reanalyzed') ?? 'Item re-analyzed');
     } catch (error) {
-      console.error('Failed to trigger re-analysis:', error);
-    }
-  };
-
-  const handleRotate = async (direction: 'cw' | 'ccw') => {
-    try {
-      await rotateImage.mutateAsync({ id: item.id, direction });
-      setImageKey((k) => k + 1);
-      toast.success(t('actions.imageRotated'));
-    } catch (error) {
-      console.error('Failed to rotate image:', error);
-      toast.error(t('actions.imageRotateError'));
-    }
-  };
-
-  const handleRemoveBackground = async () => {
-    try {
-      await removeBackground.mutateAsync({ id: item.id });
-      setImageKey((k) => k + 1);
-      toast.success(t('actions.backgroundRemoved'));
-    } catch (error) {
-      console.error('Failed to remove background:', error);
-      toast.error(t('actions.backgroundRemoveError'));
-    }
-  };
-
-  const handleRestoreOriginal = async () => {
-    try {
-      await restoreOriginal.mutateAsync(item.id);
-      setImageKey((k) => k + 1);
-      toast.success(t('actions.originalRestored'));
-    } catch (error) {
-      console.error('Failed to restore original image:', error);
-      toast.error(t('actions.originalRestoreError'));
+      toast.error(error instanceof Error ? error.message : 'Re-analysis failed');
     }
   };
 
@@ -263,7 +198,6 @@ export function ItemDetailDialog({ item, open, onOpenChange }: ItemDetailDialogP
     try {
       await replaceImage.mutateAsync({ itemId: item.id, file });
       setImageKey((k) => k + 1);
-      setActiveImageIndex(0);
       toast.success(t('actions.imageReplaced'));
     } catch (error) {
       console.error('Failed to replace image:', error);
@@ -325,15 +259,6 @@ export function ItemDetailDialog({ item, open, onOpenChange }: ItemDetailDialogP
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => setShowPairingsDialog(true)}
-                  disabled={item.status !== 'ready'}
-                  title={t('titles.findMatchingOutfits')}
-                >
-                  <Layers className="h-5 w-5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
                   onClick={() => {
                     onOpenChange(false);
                     router.push(`/dashboard/suggest?item=${item.id}`);
@@ -354,62 +279,6 @@ export function ItemDetailDialog({ item, open, onOpenChange }: ItemDetailDialogP
                     className={`h-5 w-5 ${isAnalyzing ? 'animate-spin text-primary' : ''}`}
                   />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleRotate('ccw')}
-                  disabled={rotateImage.isPending}
-                  title={t('titles.rotateLeft')}
-                >
-                  {rotateImage.isPending ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  ) : (
-                    <RotateCcw className="h-5 w-5" />
-                  )}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleRotate('cw')}
-                  disabled={rotateImage.isPending}
-                  title={t('titles.rotateRight')}
-                >
-                  {rotateImage.isPending ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  ) : (
-                    <RotateCw className="h-5 w-5" />
-                  )}
-                </Button>
-                {features?.background_removal && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={handleRemoveBackground}
-                    disabled={removeBackground.isPending || !item.image_url}
-                    title={t('titles.removeBackground')}
-                  >
-                    {removeBackground.isPending ? (
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    ) : (
-                      <Eraser className="h-5 w-5" />
-                    )}
-                  </Button>
-                )}
-                {item.original_image_path && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={handleRestoreOriginal}
-                    disabled={restoreOriginal.isPending}
-                    title={t('titles.undoBackgroundRemoval')}
-                  >
-                    {restoreOriginal.isPending ? (
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    ) : (
-                      <Undo2 className="h-5 w-5" />
-                    )}
-                  </Button>
-                )}
                 <Button
                   variant="ghost"
                   size="icon"
@@ -469,53 +338,19 @@ export function ItemDetailDialog({ item, open, onOpenChange }: ItemDetailDialogP
           {/* Scrollable content */}
           <div className="flex-1 overflow-y-auto overscroll-contain p-6 pt-4">
             <div className="grid gap-6 sm:grid-cols-2 [&>*]:min-w-0">
-            {/* Image Gallery */}
+            {/* Single photo: multi-image galleries rode on the same arq
+                image-worker as rotation and background removal, so the trial
+                has one image per item and no /items/{id}/images endpoints. */}
             <div className="space-y-2">
               <div className="relative aspect-square bg-muted rounded-lg overflow-hidden">
-                {(() => {
-                  const allImages = [
-                    { url: `${imageUrl}&v=${imageKey}`, id: 'primary' },
-                    ...(item.additional_images || []).map((img) => ({ url: img.image_url, id: img.id })),
-                  ];
-                  const currentImage = allImages[activeImageIndex] || allImages[0];
-                  return (
-                    <>
-                      <Image
-                        key={`${currentImage.id}-${imageKey}`}
-                        src={currentImage.url}
-                        alt={item.name || item.type}
-                        fill
-                        className="object-cover"
-                        sizes="(max-width: 640px) 100vw, 50vw"
-                      />
-                      {allImages.length > 1 && (
-                        <>
-                          <button
-                            className="absolute left-1 top-1/2 -translate-y-1/2 bg-black/50 text-white rounded-full p-1 hover:bg-black/70"
-                            onClick={() => setActiveImageIndex((i) => (i - 1 + allImages.length) % allImages.length)}
-                          >
-                            <ChevronLeft className="h-4 w-4" />
-                          </button>
-                          <button
-                            className="absolute right-1 top-1/2 -translate-y-1/2 bg-black/50 text-white rounded-full p-1 hover:bg-black/70"
-                            onClick={() => setActiveImageIndex((i) => (i + 1) % allImages.length)}
-                          >
-                            <ChevronRight className="h-4 w-4" />
-                          </button>
-                          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
-                            {allImages.map((_, idx) => (
-                              <button
-                                key={idx}
-                                className={`w-1.5 h-1.5 rounded-full ${idx === activeImageIndex ? 'bg-white' : 'bg-white/50'}`}
-                                onClick={() => setActiveImageIndex(idx)}
-                              />
-                            ))}
-                          </div>
-                        </>
-                      )}
-                    </>
-                  );
-                })()}
+                <Image
+                  key={imageKey}
+                  src={`${imageUrl}&v=${imageKey}`}
+                  alt={item.name || item.type}
+                  fill
+                  className="object-cover"
+                  sizes="(max-width: 640px) 100vw, 50vw"
+                />
                 {isAnalyzing && (
                   <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center gap-2">
                     <Loader2 className="h-8 w-8 text-white animate-spin" />
@@ -523,74 +358,6 @@ export function ItemDetailDialog({ item, open, onOpenChange }: ItemDetailDialogP
                   </div>
                 )}
               </div>
-              {/* Thumbnail strip */}
-              {(item.additional_images?.length > 0 || isEditing) && (
-                <div className="flex gap-1.5 overflow-x-auto">
-                  <button
-                    className={`relative w-12 h-12 rounded border-2 overflow-hidden flex-shrink-0 ${activeImageIndex === 0 ? 'border-primary' : 'border-transparent'}`}
-                    onClick={() => setActiveImageIndex(0)}
-                  >
-                    <Image src={imageUrl} alt={t('view.primaryImage')} fill className="object-cover" sizes="48px" />
-                  </button>
-                  {(item.additional_images || []).map((img, idx) => (
-                    <div key={img.id} className="relative flex-shrink-0">
-                      <button
-                        className={`relative w-12 h-12 rounded border-2 overflow-hidden ${activeImageIndex === idx + 1 ? 'border-primary' : 'border-transparent'}`}
-                        onClick={() => setActiveImageIndex(idx + 1)}
-                      >
-                        <Image src={img.thumbnail_url || img.image_url} alt="" fill className="object-cover" sizes="48px" />
-                      </button>
-                      {isEditing && (
-                        <div className="absolute -top-1 -right-1 flex gap-0.5">
-                          <button
-                            className="bg-primary text-primary-foreground rounded-full p-0.5 hover:bg-primary/90"
-                            title={t('titles.setAsPrimary')}
-                            onClick={() => {
-                              setPrimary.mutate({ itemId: item.id, imageId: img.id });
-                              setActiveImageIndex(0);
-                            }}
-                          >
-                            <Star className="h-2.5 w-2.5" />
-                          </button>
-                          <button
-                            className="bg-destructive text-destructive-foreground rounded-full p-0.5 hover:bg-destructive/90"
-                            title={t('titles.deleteImage')}
-                            onClick={() => {
-                              deleteImage.mutate({ itemId: item.id, imageId: img.id });
-                              if (activeImageIndex > idx) setActiveImageIndex((i) => i - 1);
-                            }}
-                          >
-                            <X className="h-2.5 w-2.5" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  {isEditing && (item.additional_images?.length || 0) < 4 && (
-                    <label
-                      className="w-12 h-12 rounded border-2 border-dashed border-muted-foreground/30 flex items-center justify-center cursor-pointer hover:border-primary/50 flex-shrink-0"
-                    >
-                      {addImage.isPending ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                      ) : (
-                        <Plus className="h-4 w-4 text-muted-foreground" />
-                      )}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            addImage.mutate({ itemId: item.id, file });
-                          }
-                          e.target.value = '';
-                        }}
-                      />
-                    </label>
-                  )}
-                </div>
-              )}
             </div>
 
             {/* Details */}
@@ -774,167 +541,6 @@ export function ItemDetailDialog({ item, open, onOpenChange }: ItemDetailDialogP
                     )}
                   </div>
 
-                  {/* Wash Status */}
-                  <div className="space-y-2 pt-2 border-t">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-sm font-medium">
-                        <Droplets className={`h-4 w-4 ${item.needs_wash ? 'text-amber-500' : 'text-muted-foreground'}`} />
-                        {t('view.washStatus')}
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={handleMarkWashed}
-                        disabled={logWash.isPending}
-                      >
-                        {logWash.isPending ? (
-                          <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                        ) : (
-                          <Droplets className="h-3 w-3 mr-1" />
-                        )}
-                        {t('actions.markWashed')}
-                      </Button>
-                    </div>
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between text-xs text-muted-foreground">
-                        <span>{t('view.wearsSinceWash', { current: item.wears_since_wash, max: item.effective_wash_interval })}</span>
-                        {item.needs_wash && (
-                          <span className="text-amber-500 font-medium">{t('view.needsWashing')}</span>
-                        )}
-                      </div>
-                      <Progress
-                        value={Math.min((item.wears_since_wash / item.effective_wash_interval) * 100, 100)}
-                        className={`h-2 ${item.needs_wash ? '[&>div]:bg-amber-500' : ''}`}
-                      />
-                      {item.last_washed_at && (
-                        <p className="text-xs text-muted-foreground">
-                          {t('view.lastWashed', { date: new Date(item.last_washed_at).toLocaleDateString() })}
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Wash History */}
-                    {washHistory && washHistory.length > 0 && (
-                      <Collapsible open={showWashHistory} onOpenChange={setShowWashHistory}>
-                        <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
-                          <ChevronDown className={`h-3 w-3 transition-transform ${showWashHistory ? 'rotate-180' : ''}`} />
-                          {t('view.washHistory', { count: washHistory.length })}
-                        </CollapsibleTrigger>
-                        <CollapsibleContent className="mt-1.5 space-y-1">
-                          {washHistory.map((wash) => (
-                            <div key={wash.id} className="text-xs text-muted-foreground flex items-center gap-2">
-                              <span>{new Date(wash.washed_at).toLocaleDateString()}</span>
-                              {wash.method && <Badge variant="outline" className="text-[10px] h-4">{wash.method}</Badge>}
-                              {wash.notes && <span className="truncate">{wash.notes}</span>}
-                            </div>
-                          ))}
-                        </CollapsibleContent>
-                      </Collapsible>
-                    )}
-                  </div>
-
-                  {/* Wear History */}
-                  {item.wear_count > 0 && wearStats && (
-                    <div className="space-y-2 pt-2 border-t">
-                      <div className="flex items-center gap-2 text-sm font-medium">
-                        <Calendar className="h-4 w-4 text-muted-foreground" />
-                        {t('view.wearHistory')}
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        <div className="bg-muted/50 rounded-md p-2">
-                          <p className="text-muted-foreground">{t('view.totalWears')}</p>
-                          <p className="font-medium text-sm">{wearStats.total_wears}</p>
-                        </div>
-                        <div className="bg-muted/50 rounded-md p-2">
-                          <p className="text-muted-foreground">{t('view.lastWorn')}</p>
-                          <p className="font-medium text-sm">
-                            {wearStats.days_since_last_worn === null
-                              ? t('view.never')
-                              : wearStats.days_since_last_worn === 0
-                              ? t('view.today')
-                              : t('view.daysAgo', { count: wearStats.days_since_last_worn })}
-                          </p>
-                        </div>
-                        <div className="bg-muted/50 rounded-md p-2">
-                          <p className="text-muted-foreground">{t('view.avgPerMonth')}</p>
-                          <p className="font-medium text-sm">{wearStats.average_wears_per_month}</p>
-                        </div>
-                        {wearStats.most_common_occasion && (
-                          <div className="bg-muted/50 rounded-md p-2">
-                            <p className="text-muted-foreground">{t('view.usualOccasion')}</p>
-                            <p className="font-medium text-sm capitalize">{wearStats.most_common_occasion}</p>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Mini bar chart - wear by month */}
-                      {Object.keys(wearStats.wear_by_month).length > 0 && (
-                        <div className="space-y-1">
-                          <p className="text-xs text-muted-foreground">{t('view.last6Months')}</p>
-                          <div className="flex items-end gap-1 h-12">
-                            {Object.entries(wearStats.wear_by_month).map(([month, count]) => {
-                              const maxCount = Math.max(...Object.values(wearStats.wear_by_month), 1);
-                              const height = (count / maxCount) * 100;
-                              return (
-                                <div key={month} className="flex-1 flex flex-col items-center gap-0.5" title={t('view.monthWears', { month, count })}>
-                                  <div
-                                    className="w-full bg-primary/70 rounded-t-sm min-h-[2px]"
-                                    style={{ height: `${Math.max(height, 4)}%` }}
-                                  />
-                                  <span className="text-[9px] text-muted-foreground">{month.split('-')[1]}</span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Wear timeline */}
-                      {wearHistory && wearHistory.length > 0 && (
-                        <Collapsible open={showWearHistory} onOpenChange={setShowWearHistory}>
-                          <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
-                            <ChevronDown className={`h-3 w-3 transition-transform ${showWearHistory ? 'rotate-180' : ''}`} />
-                            {t('view.timeline', { count: wearHistory.length })}
-                          </CollapsibleTrigger>
-                          <CollapsibleContent className="mt-1.5 space-y-1.5">
-                            {wearHistory.map((entry) => (
-                              <div key={entry.id} className="text-xs flex items-start gap-2">
-                                <span className="text-muted-foreground whitespace-nowrap">
-                                  {new Date(entry.worn_at).toLocaleDateString()}
-                                </span>
-                                {entry.occasion && (
-                                  <Badge variant="outline" className="text-[10px] h-4">{entry.occasion}</Badge>
-                                )}
-                                {entry.outfit && (
-                                  <div className="flex -space-x-1">
-                                    {entry.outfit.items.slice(0, 3).map((oi) => (
-                                      <div
-                                        key={oi.id}
-                                        className="w-5 h-5 rounded-full bg-muted border-2 border-background overflow-hidden"
-                                        title={oi.name || oi.type}
-                                      >
-                                        {oi.thumbnail_url && (
-                                          <Image
-                                            src={oi.thumbnail_url}
-                                            alt={oi.name || oi.type}
-                                            width={20}
-                                            height={20}
-                                            className="object-cover w-full h-full"
-                                          />
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </CollapsibleContent>
-                        </Collapsible>
-                      )}
-                    </div>
-                  )}
-
                   {/* AI Analysis */}
                   {(hasAiTags || item.ai_description) && item.status === 'ready' && (
                     <div className="space-y-2 pt-2 border-t">
@@ -1071,13 +677,6 @@ export function ItemDetailDialog({ item, open, onOpenChange }: ItemDetailDialogP
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {/* Generate Pairings Dialog */}
-      <GeneratePairingsDialog
-        item={item}
-        open={showPairingsDialog}
-        onOpenChange={setShowPairingsDialog}
-      />
     </>
   );
 }

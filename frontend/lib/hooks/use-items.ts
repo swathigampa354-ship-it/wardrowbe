@@ -1,37 +1,37 @@
 'use client';
 
-import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useSession } from 'next-auth/react';
-import { api, getAccessToken, setAccessToken, ApiError, NetworkError } from '@/lib/api';
-import { Item, ItemListResponse, ItemFilter, WashHistoryEntry, ItemImage, TaggingProgress } from '@/lib/types';
-import { chunkArray } from '@/lib/utils';
-import { enqueueFiles } from '@/lib/upload-queue';
-import { startDrain } from '@/lib/upload-manager';
+/**
+ * Item hooks for the trial build.
+ *
+ * The upstream file was 1,294 lines because it drove a durable, offline-first
+ * upload pipeline: IndexedDB staging (lib/upload-queue.ts), a background drain
+ * loop (lib/upload-manager.ts), queue cancellation, batch cursors for
+ * "select all", pHash duplicate reports, wash logging, multi-photo galleries,
+ * rotation and background-removal jobs. All of that exists only because
+ * analysis used to happen in a Redis/arq worker.
+ *
+ * Here the API analyzes synchronously, so an upload is a single request that
+ * already contains the tags. These hooks keep the same names and return shapes
+ * so the existing UI works unchanged; the removed features are deleted from the
+ * UI too, not left as buttons that call missing endpoints.
+ */
 
-// Must not exceed the backend's MAX_BULK_UPLOAD_COUNT setting, or every chunk
-// larger than the server's limit fails with a 400.
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { api, getAccessToken, ApiError, NetworkError } from '@/lib/api';
+import { Item, ItemListResponse, ItemFilter, TaggingProgress, BulkUploadResponse } from '@/lib/types';
+import { chunkArray } from '@/lib/utils';
+
+// The trial's server cap (MAX_BULK_UPLOAD_COUNT); chunk so one request never
+// carries the whole wardrobe.
 const BULK_UPLOAD_CHUNK_SIZE = 20;
 
-// Helper to set token if available (for NextAuth mode)
-function useSetTokenIfAvailable() {
-  const { data: session } = useSession();
-  if (session?.accessToken) {
-    setAccessToken(session.accessToken as string);
-  }
-}
-
 export function useItems(filters: ItemFilter = {}, page = 1, pageSize = 20) {
-  const { data: session, status } = useSession();
-  useSetTokenIfAvailable();
 
   return useQuery({
     queryKey: ['items', filters, page, pageSize],
     queryFn: async () => {
-      const params: Record<string, string> = {
-        page: String(page),
-        page_size: String(pageSize),
-      };
+      const params: Record<string, string> = { page: String(page), page_size: String(pageSize) };
       if (filters.type) params.type = filters.type;
       if (filters.colors?.length) params.colors = filters.colors.join(',');
       if (filters.search) params.search = filters.search;
@@ -44,62 +44,85 @@ export function useItems(filters: ItemFilter = {}, page = 1, pageSize = 20) {
 
       return api.get<ItemListResponse>('/items', { params });
     },
-    enabled: status !== 'loading',
-    // Poll more frequently when items are processing (every 5 seconds), otherwise every 30 seconds
+    // Analysis is synchronous, so a "processing" row only appears if an upload
+    // is still in flight in another tab. Poll fast while that is true.
     refetchInterval: (query) => {
       const data = query.state.data as ItemListResponse | undefined;
-      const hasProcessing = data?.items?.some((item) => item.status === 'processing');
-      return hasProcessing ? 5000 : 30000;
+      return data?.items?.some((item) => item.status === 'processing') ? 5000 : 30000;
     },
-    // Tagging runs server-side in the worker, so it keeps going while the tab is
-    // hidden. Without this the polling stops and the UI looks frozen, which reads
-    // as "analysis stopped when I switched tabs".
-    refetchIntervalInBackground: true,
   });
 }
 
 export function useTaggingProgress() {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
-
   return useQuery({
     queryKey: ['tagging-progress'],
     queryFn: () => api.get<TaggingProgress>('/items/tagging-progress'),
-    enabled: status !== 'loading',
-    refetchInterval: (query) => {
-      const data = query.state.data as TaggingProgress | undefined;
-      return data && data.processing > 0 ? 5000 : 30000;
-    },
-    refetchIntervalInBackground: true,
+    refetchInterval: 30000,
   });
 }
 
 export function useItem(itemId: string) {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
-
   return useQuery({
     queryKey: ['item', itemId],
     queryFn: () => api.get<Item>(`/items/${itemId}`),
-    enabled: !!itemId && status !== 'loading',
+    enabled: !!itemId,
   });
+}
+
+export function useItemTypes() {
+  return useQuery({
+    queryKey: ['item-types'],
+    queryFn: () => api.get<{ types: { type: string; count: number }[] }>('/items/types'),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export async function uploadSingleItem(file: File, name?: string): Promise<Item> {
+  const token = getAccessToken();
+  const formData = new FormData();
+  formData.append('image', file);
+  if (name) formData.append('name', name);
+
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  let response: Response;
+  try {
+    response = await fetch('/api/v1/items', {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+      headers,
+    });
+  } catch {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      throw new NetworkError('You appear to be offline. Please check your connection.');
+    }
+    throw new NetworkError('Unable to connect to the server. Please try again.');
+  }
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new ApiError(
+      typeof data.detail === 'string' ? data.detail : data.detail?.message || 'Upload failed',
+      response.status,
+      data
+    );
+  }
+  return response.json();
 }
 
 export function useCreateItem() {
   const queryClient = useQueryClient();
-  const { data: session } = useSession();
 
   return useMutation({
     mutationFn: async (formData: FormData) => {
-      const token = session?.accessToken || getAccessToken();
+      const token = getAccessToken();
       const headers: Record<string, string> = {};
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
+      if (token) headers['Authorization'] = `Bearer ${token}`;
 
       let response: Response;
       try {
-        // Use the Next.js proxy path for client-side requests
         response = await fetch('/api/v1/items', {
           method: 'POST',
           body: formData,
@@ -107,82 +130,35 @@ export function useCreateItem() {
           headers,
         });
       } catch {
-        if (!navigator.onLine) {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
           throw new NetworkError('You appear to be offline. Please check your connection.');
         }
-        throw new NetworkError('Unable to connect to server. Please try again.');
+        throw new NetworkError('Unable to connect to the server. Please try again.');
       }
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new ApiError(
-          data.detail || 'Failed to create item',
-          response.status,
-          data
-        );
+        throw new ApiError(data.detail || 'Failed to create item', response.status, data);
       }
-
-      return response.json();
+      return response.json() as Promise<Item>;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['items'] }),
   });
 }
 
 export function useUpdateItem() {
   const queryClient = useQueryClient();
-  const { data: session } = useSession();
 
   return useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: Partial<Item> }) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.patch<Item>(`/items/${id}`, data);
-    },
-    onMutate: async ({ id, data }) => {
-      await queryClient.cancelQueries({ queryKey: ['items'] });
-      await queryClient.cancelQueries({ queryKey: ['item', id] });
-
-      const previousListData = queryClient.getQueriesData({ queryKey: ['items'] });
-      const previousItemData = queryClient.getQueryData<Item>(['item', id]);
-
-      queryClient.setQueriesData({ queryKey: ['items'] }, (old: ItemListResponse | undefined) => {
-        if (!old) return old;
-        return {
-          ...old,
-          items: old.items.map((item) => (item.id === id ? { ...item, ...data } : item)),
-        };
-      });
-
-      if (previousItemData) {
-        queryClient.setQueryData<Item>(['item', id], { ...previousItemData, ...data });
-      }
-
-      return { previousListData, previousItemData };
-    },
-    onError: (_err, variables, context) => {
-      if (context?.previousListData) {
-        context.previousListData.forEach(([queryKey, data]) => {
-          queryClient.setQueryData(queryKey, data);
-        });
-      }
-      if (context?.previousItemData) {
-        queryClient.setQueryData(['item', variables.id], context.previousItemData);
-      }
-    },
+    mutationFn: async ({ id, data }: { id: string; data: Partial<Item> }) =>
+      api.patch<Item>(`/items/${id}`, data),
     onSuccess: (updatedItem, variables) => {
-      // Use the server's authoritative copy (server-derived fields like updated_at)
-      // rather than the optimistic merge, since the response is already in hand.
       queryClient.setQueryData(['item', variables.id], updatedItem);
-      queryClient.setQueriesData({ queryKey: ['items'] }, (old: ItemListResponse | undefined) => {
-        if (!old) return old;
-        return {
-          ...old,
-          items: old.items.map((item) => (item.id === variables.id ? updatedItem : item)),
-        };
-      });
+      queryClient.setQueriesData({ queryKey: ['items'] }, (old: ItemListResponse | undefined) =>
+        old
+          ? { ...old, items: old.items.map((item) => (item.id === variables.id ? updatedItem : item)) }
+          : old
+      );
     },
     onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: ['items'] });
@@ -191,60 +167,28 @@ export function useUpdateItem() {
   });
 }
 
-export function useRemoveBackground() {
+export function useDeleteItem() {
   const queryClient = useQueryClient();
-  const { data: session } = useSession();
 
   return useMutation({
-    mutationFn: async ({ id, bg_color }: { id: string; bg_color?: string }) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.post<Item>(`/items/${id}/remove-background`, { bg_color: bg_color ?? '#FFFFFF' });
-    },
-    onSuccess: (_, variables) => {
+    mutationFn: (id: string) => api.delete(`/items/${id}`),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['items'] });
-      queryClient.invalidateQueries({ queryKey: ['item', variables.id] });
       queryClient.invalidateQueries({ queryKey: ['outfits'] });
-      queryClient.invalidateQueries({ queryKey: ['calendarOutfits'] });
-    },
-  });
-}
-
-export function useRestoreOriginal() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async (id: string) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.post<Item>(`/items/${id}/restore-original`);
-    },
-    onSuccess: (_, id) => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-      queryClient.invalidateQueries({ queryKey: ['item', id] });
-      queryClient.invalidateQueries({ queryKey: ['outfits'] });
-      queryClient.invalidateQueries({ queryKey: ['calendarOutfits'] });
     },
   });
 }
 
 export function useReplaceItemImage() {
   const queryClient = useQueryClient();
-  const { data: session } = useSession();
 
   return useMutation({
     mutationFn: async ({ itemId, file }: { itemId: string; file: File }) => {
-      const token = session?.accessToken || getAccessToken();
+      const token = getAccessToken();
       const formData = new FormData();
       formData.append('image', file);
-
       const headers: Record<string, string> = {};
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
+      if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const response = await fetch(`/api/v1/items/${itemId}/image`, {
         method: 'PUT',
@@ -252,871 +196,120 @@ export function useReplaceItemImage() {
         credentials: 'include',
         headers,
       });
-
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new ApiError(data.detail || 'Failed to replace image', response.status, data);
       }
-
       return response.json() as Promise<Item>;
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['items'] });
       queryClient.invalidateQueries({ queryKey: ['item', variables.itemId] });
       queryClient.invalidateQueries({ queryKey: ['outfits'] });
-      queryClient.invalidateQueries({ queryKey: ['calendarOutfits'] });
     },
-  });
-}
-
-export function useDeleteItem() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async (id: string) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.delete(`/items/${id}`);
-    },
-    onMutate: async (deletedId) => {
-      // Cancel outgoing refetches
-      await queryClient.cancelQueries({ queryKey: ['items'] });
-
-      // Snapshot previous value
-      const previousData = queryClient.getQueriesData({ queryKey: ['items'] });
-
-      // Optimistically remove from all item queries
-      queryClient.setQueriesData({ queryKey: ['items'] }, (old: ItemListResponse | undefined) => {
-        if (!old) return old;
-        return {
-          ...old,
-          items: old.items.filter((item) => item.id !== deletedId),
-          total: old.total - 1,
-        };
-      });
-
-      return { previousData };
-    },
-    onError: (_err, _id, context) => {
-      // Rollback on error
-      if (context?.previousData) {
-        context.previousData.forEach(([queryKey, data]) => {
-          queryClient.setQueryData(queryKey, data);
-        });
-      }
-    },
-    onSettled: () => {
-      // Refetch to ensure consistency
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-      queryClient.invalidateQueries({ queryKey: ['item-types'] });
-    },
-  });
-}
-
-export function useArchiveItem() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async ({ id, reason }: { id: string; reason?: string }) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.post<Item>(`/items/${id}/archive`, { reason });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-    },
-  });
-}
-
-export function useLogWear() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async ({
-      id,
-      worn_at,
-      occasion,
-    }: {
-      id: string;
-      worn_at?: string;
-      occasion?: string;
-    }) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.post<Item>(`/items/${id}/wear`, { worn_at, occasion });
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-      queryClient.invalidateQueries({ queryKey: ['item', variables.id] });
-    },
-  });
-}
-
-export function useLogWash() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async ({
-      id,
-      washed_at,
-      method,
-      notes,
-    }: {
-      id: string;
-      washed_at?: string;
-      method?: string;
-      notes?: string;
-    }) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.post<Item>(`/items/${id}/wash`, { washed_at, method, notes });
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-      queryClient.invalidateQueries({ queryKey: ['item', variables.id] });
-      queryClient.invalidateQueries({ queryKey: ['wash-history', variables.id] });
-    },
-  });
-}
-
-export function useWashHistory(itemId: string) {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
-
-  return useQuery({
-    queryKey: ['wash-history', itemId],
-    queryFn: () => api.get<WashHistoryEntry[]>(`/items/${itemId}/wash-history`),
-    enabled: !!itemId && status !== 'loading',
-  });
-}
-
-export interface WearStats {
-  total_wears: number;
-  days_since_last_worn: number | null;
-  average_wears_per_month: number;
-  wear_by_month: Record<string, number>;
-  wear_by_day_of_week: Record<string, number>;
-  most_common_occasion: string | null;
-}
-
-export function useItemWearStats(itemId: string) {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
-
-  return useQuery({
-    queryKey: ['wear-stats', itemId],
-    queryFn: () => api.get<WearStats>(`/items/${itemId}/wear-stats`),
-    enabled: !!itemId && status !== 'loading',
-  });
-}
-
-export interface WearHistoryEntry {
-  id: string;
-  worn_at: string;
-  occasion?: string;
-  notes?: string;
-  outfit?: {
-    id: string;
-    occasion: string;
-    items: Array<{
-      id: string;
-      type: string;
-      name?: string;
-      thumbnail_url?: string;
-    }>;
-  };
-}
-
-export function useItemWearHistory(itemId: string, limit = 10) {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
-
-  return useQuery({
-    queryKey: ['wear-history', itemId],
-    queryFn: () => api.get<WearHistoryEntry[]>(`/items/${itemId}/history?limit=${limit}`),
-    enabled: !!itemId && status !== 'loading',
-  });
-}
-
-export function useAddItemImage() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async ({ itemId, file }: { itemId: string; file: File }) => {
-      const token = session?.accessToken || getAccessToken();
-      const formData = new FormData();
-      formData.append('image', file);
-
-      const headers: Record<string, string> = {};
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      const response = await fetch(`/api/v1/items/${itemId}/images`, {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-        headers,
-      });
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new ApiError(data.detail || 'Failed to upload image', response.status, data);
-      }
-
-      return response.json() as Promise<ItemImage>;
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-      queryClient.invalidateQueries({ queryKey: ['item', variables.itemId] });
-    },
-  });
-}
-
-export function useDeleteItemImage() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async ({ itemId, imageId }: { itemId: string; imageId: string }) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.delete(`/items/${itemId}/images/${imageId}`);
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-      queryClient.invalidateQueries({ queryKey: ['item', variables.itemId] });
-    },
-  });
-}
-
-export function useSetPrimaryImage() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async ({ itemId, imageId }: { itemId: string; imageId: string }) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.post<Item>(`/items/${itemId}/images/${imageId}/set-primary`);
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-      queryClient.invalidateQueries({ queryKey: ['item', variables.itemId] });
-    },
-  });
-}
-
-export function useRotateImage() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async ({
-      id,
-      direction,
-    }: {
-      id: string;
-      direction: 'cw' | 'ccw';
-    }) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.post<Item>(`/items/${id}/rotate?direction=${direction}`);
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-      queryClient.invalidateQueries({ queryKey: ['item', variables.id] });
-      queryClient.invalidateQueries({ queryKey: ['outfits'] });
-      queryClient.invalidateQueries({ queryKey: ['calendarOutfits'] });
-    },
-  });
-}
-
-export function useItemTypes() {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
-
-  return useQuery({
-    queryKey: ['item-types'],
-    queryFn: () => api.get<Array<{ type: string; count: number }>>('/items/types'),
-    enabled: status !== 'loading',
-  });
-}
-
-export function useColorDistribution() {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
-
-  return useQuery({
-    queryKey: ['color-distribution'],
-    queryFn: () => api.get<Array<{ color: string; count: number }>>('/items/colors'),
-    enabled: status !== 'loading',
   });
 }
 
 export function useReanalyzeItem() {
   const queryClient = useQueryClient();
-  const { data: session } = useSession();
 
   return useMutation({
-    mutationFn: async (id: string) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.post<{ job_id?: string; status: string; retry_after_seconds?: number }>(
-        `/items/${id}/analyze`
-      );
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-    },
-  });
-}
-
-export function useCancelAnalysis() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async (id: string) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return api.post<Item>(`/items/${id}/cancel-analysis`);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-    },
-  });
-}
-
-export interface BulkUploadResult {
-  filename: string;
-  success: boolean;
-  item?: Item;
-  error?: string;
-  duplicate?: boolean;
-  existing_item_id?: string;
-}
-
-export interface BulkUploadResponse {
-  total: number;
-  successful: number;
-  failed: number;
-  results: BulkUploadResult[];
-}
-
-export interface BulkDeleteResponse extends BulkBatchResponse {
-  deleted: number;
-  failed: number;
-}
-
-export interface BulkOperationParams {
-  // Either provide explicit item_ids, or use select_all with excluded_ids
-  item_ids?: string[];
-  select_all?: boolean;
-  excluded_ids?: string[];
-  // Filters to apply when using select_all (to match the current view)
-  filters?: {
-    type?: string;
-    search?: string;
-    needs_wash?: boolean;
-    favorite?: boolean;
-    is_archived?: boolean;
-  };
-}
-
-interface BulkBatchResponse {
-  errors: string[];
-  next_cursor?: string | null;
-  has_more?: boolean;
-}
-
-// The server caps how many items one bulk request touches. An explicit id list
-// is ours to keep under the cap, but a select_all is only filters here, so the
-// server walks it and hands back a cursor for the next batch.
-const MAX_BULK_BATCHES = 200;
-
-function mergeBulkBatches<T extends BulkBatchResponse>(
-  acc: T,
-  batch: T,
-  sumKeys: (keyof T)[]
-): T {
-  const merged = { ...acc, ...batch } as T;
-  for (const key of sumKeys) {
-    merged[key] = ((acc[key] as number) + (batch[key] as number)) as T[keyof T];
-  }
-  merged.errors = [...acc.errors, ...batch.errors];
-  return merged;
-}
-
-const BULK_ACTION_LIMIT_ERROR = /^Maximum (\d+) items per bulk action$/;
-
-// The server's max_bulk_action_count is admin-tunable on a self-hosted install
-// and is not exposed to the client, so it is learned from the first rejection
-// and cached, the same way the upload queue learns max_bulk_upload_count.
-let learnedBulkActionLimit: number | null = null;
-
-function bulkActionLimitFrom(error: unknown): number | null {
-  if (!(error instanceof ApiError) || error.status !== 400) return null;
-  const match = error.message.match(BULK_ACTION_LIMIT_ERROR);
-  return match ? Number(match[1]) : null;
-}
-
-async function drainIdList<T extends BulkBatchResponse>(
-  path: string,
-  params: BulkOperationParams,
-  ids: string[],
-  sumKeys: (keyof T)[]
-): Promise<T> {
-  const chunks = learnedBulkActionLimit ? chunkArray(ids, learnedBulkActionLimit) : [ids];
-  const results: T[] = [];
-
-  for (const chunk of chunks) {
-    try {
-      results.push(await api.post<T>(path, { ...params, item_ids: chunk }));
-    } catch (error) {
-      const limit = bulkActionLimitFrom(error);
-      if (limit === null || limit >= chunk.length) throw error;
-      learnedBulkActionLimit = limit;
-      results.push(await drainIdList<T>(path, params, chunk, sumKeys));
-    }
-  }
-
-  return results.reduce((acc, result) => mergeBulkBatches(acc, result, sumKeys));
-}
-
-async function drainCursor<T extends BulkBatchResponse>(
-  path: string,
-  params: BulkOperationParams,
-  sumKeys: (keyof T)[]
-): Promise<T> {
-  let batch = await api.post<T>(path, params);
-  let merged = batch;
-
-  for (let i = 0; batch.has_more && batch.next_cursor && i < MAX_BULK_BATCHES; i++) {
-    batch = await api.post<T>(path, { ...params, after_id: batch.next_cursor });
-    merged = mergeBulkBatches(merged, batch, sumKeys);
-  }
-
-  return merged;
-}
-
-export async function drainBulkAction<T extends BulkBatchResponse>(
-  path: string,
-  params: BulkOperationParams,
-  sumKeys: (keyof T)[]
-): Promise<T> {
-  if (params.item_ids?.length) {
-    return drainIdList<T>(path, params, params.item_ids, sumKeys);
-  }
-  return drainCursor<T>(path, params, sumKeys);
-}
-
-export function useBulkDeleteItems() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async (params: BulkOperationParams) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return drainBulkAction<BulkDeleteResponse>('/items/bulk/delete', params, [
-        'deleted',
-        'failed',
-      ]);
-    },
-    onMutate: async (params) => {
-      // Cancel outgoing refetches
-      await queryClient.cancelQueries({ queryKey: ['items'] });
-
-      // Snapshot previous value
-      const previousData = queryClient.getQueriesData({ queryKey: ['items'] });
-
-      // Optimistically update UI
-      if (params.select_all) {
-        // If select_all, remove all items except excluded ones
-        const excludedSet = new Set(params.excluded_ids || []);
-        queryClient.setQueriesData({ queryKey: ['items'] }, (old: ItemListResponse | undefined) => {
-          if (!old) return old;
-          return {
-            ...old,
-            items: old.items.filter((item) => excludedSet.has(item.id)),
-            total: excludedSet.size,
-          };
-        });
-      } else if (params.item_ids) {
-        // Remove specific items
-        const deletedSet = new Set(params.item_ids);
-        queryClient.setQueriesData({ queryKey: ['items'] }, (old: ItemListResponse | undefined) => {
-          if (!old) return old;
-          return {
-            ...old,
-            items: old.items.filter((item) => !deletedSet.has(item.id)),
-            total: old.total - params.item_ids!.length,
-          };
-        });
-      }
-
-      return { previousData };
-    },
-    onError: (_err, _params, context) => {
-      // Rollback on error
-      if (context?.previousData) {
-        context.previousData.forEach(([queryKey, data]) => {
-          queryClient.setQueryData(queryKey, data);
-        });
-      }
-    },
-    onSettled: () => {
-      // Refetch to ensure consistency
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-      queryClient.invalidateQueries({ queryKey: ['item-types'] });
-    },
-  });
-}
-
-export interface BulkAnalyzeResponse extends BulkBatchResponse {
-  queued: number;
-  failed: number;
-  skipped: number;
-  cooldown: number;
-  retry_after_seconds: number | null;
-}
-
-export function useBulkReanalyzeItems() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async (params: BulkOperationParams) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      const result = await drainBulkAction<BulkAnalyzeResponse>('/items/bulk/analyze', params, [
-        'queued',
-        'failed',
-        'skipped',
-        'cooldown',
-      ]);
-      // retry_after_seconds is a wait, not a tally: summing batches would tell
-      // the user to wait far longer than any single item actually needs.
-      return result;
-    },
-    onMutate: async (params) => {
-      // Cancel outgoing refetches
-      await queryClient.cancelQueries({ queryKey: ['items'] });
-
-      // Snapshot previous value
-      const previousData = queryClient.getQueriesData({ queryKey: ['items'] });
-
-      // Optimistically set items to processing status
-      if (params.select_all) {
-        const excludedSet = new Set(params.excluded_ids || []);
-        queryClient.setQueriesData({ queryKey: ['items'] }, (old: ItemListResponse | undefined) => {
-          if (!old) return old;
-          return {
-            ...old,
-            items: old.items.map((item) =>
-              !excludedSet.has(item.id)
-                ? { ...item, status: 'processing' as const, ai_started_at: null }
-                : item
-            ),
-          };
-        });
-      } else if (params.item_ids) {
-        const itemIdSet = new Set(params.item_ids);
-        queryClient.setQueriesData({ queryKey: ['items'] }, (old: ItemListResponse | undefined) => {
-          if (!old) return old;
-          return {
-            ...old,
-            items: old.items.map((item) =>
-              itemIdSet.has(item.id)
-                ? { ...item, status: 'processing' as const, ai_started_at: null }
-                : item
-            ),
-          };
-        });
-      }
-
-      return { previousData };
-    },
-    onError: (_err, _params, context) => {
-      // Rollback on error
-      if (context?.previousData) {
-        context.previousData.forEach(([queryKey, data]) => {
-          queryClient.setQueryData(queryKey, data);
-        });
-      }
-    },
-    onSettled: () => {
-      // Refetch to ensure consistency
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-    },
-  });
-}
-
-export interface BulkCancelAnalysisResponse extends BulkBatchResponse {
-  cancelled: number;
-  skipped: number;
-}
-
-export function useBulkCancelAnalysis() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async (params: BulkOperationParams) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return drainBulkAction<BulkCancelAnalysisResponse>(
-        '/items/bulk/cancel-analysis',
-        params,
-        ['cancelled', 'skipped']
-      );
-    },
-    onSettled: () => {
+    mutationFn: (id: string) => api.post<Item>(`/items/${id}/analyze`),
+    onSuccess: (item) => {
+      queryClient.setQueryData(['item', item.id], item);
       queryClient.invalidateQueries({ queryKey: ['items'] });
       queryClient.invalidateQueries({ queryKey: ['tagging-progress'] });
     },
   });
 }
 
-export interface BulkRotateResponse extends BulkBatchResponse {
-  queued: number;
-  failed: number;
-  skipped: number;
+export interface BulkOperationParams {
+  item_ids?: string[];
+  select_all?: boolean;
+  excluded_ids?: string[];
+  filters?: ItemFilter;
 }
 
-export function useBulkRotateItems() {
+export function useBulkDeleteItems() {
   const queryClient = useQueryClient();
-  const { data: session } = useSession();
 
   return useMutation({
-    mutationFn: async (params: BulkOperationParams & { direction: 'cw' | 'ccw' }) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return drainBulkAction<BulkRotateResponse>('/items/bulk/rotate', params, [
-        'queued',
-        'failed',
-        'skipped',
-      ]);
+    mutationFn: async (params: BulkOperationParams) => {
+      const ids = params.select_all
+        ? (
+            await api.get<ItemListResponse>('/items', {
+              params: { page: '1', page_size: '100', ...(params.filters as Record<string, string>) },
+            })
+          ).items.map((i) => i.id)
+        : params.item_ids || [];
+      const filtered = params.excluded_ids?.length
+        ? ids.filter((id) => !params.excluded_ids!.includes(id))
+        : ids;
+      return api.post<BulkUploadResponse>('/items/bulk/delete', filtered);
     },
-    onMutate: async (params) => {
-      await queryClient.cancelQueries({ queryKey: ['items'] });
-      const previousData = queryClient.getQueriesData({ queryKey: ['items'] });
-
-      const shouldMark = params.select_all
-        ? (id: string) => !new Set(params.excluded_ids || []).has(id)
-        : (id: string) => new Set(params.item_ids || []).has(id);
-
-      queryClient.setQueriesData({ queryKey: ['items'] }, (old: ItemListResponse | undefined) => {
-        if (!old) return old;
-        return {
-          ...old,
-          items: old.items.map((item) =>
-            shouldMark(item.id)
-              ? {
-                  ...item,
-                  status: 'processing' as const,
-                  processing_kind: 'rotate' as const,
-                  ai_started_at: null,
-                }
-              : item
-          ),
-        };
-      });
-
-      return { previousData };
-    },
-    onError: (_err, _params, context) => {
-      if (context?.previousData) {
-        context.previousData.forEach(([queryKey, data]) => {
-          queryClient.setQueryData(queryKey, data);
-        });
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['items'] }),
   });
 }
 
-export interface BulkRemoveBackgroundResponse extends BulkBatchResponse {
-  queued: number;
-  failed: number;
-  skipped: number;
-  already_done: number;
-}
-
-export function useBulkRemoveBackgroundItems() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-
-  return useMutation({
-    mutationFn: async (params: BulkOperationParams & { bg_color?: string }) => {
-      if (session?.accessToken) {
-        setAccessToken(session.accessToken as string);
-      }
-      return drainBulkAction<BulkRemoveBackgroundResponse>(
-        '/items/bulk/remove-background',
-        params,
-        ['queued', 'failed', 'skipped', 'already_done']
-      );
-    },
-    onMutate: async (params) => {
-      // Cancel outgoing refetches
-      await queryClient.cancelQueries({ queryKey: ['items'] });
-
-      // Snapshot previous value
-      const previousData = queryClient.getQueriesData({ queryKey: ['items'] });
-
-      // Optimistically set items to processing status, mirroring useBulkReanalyzeItems
-      if (params.select_all) {
-        const excludedSet = new Set(params.excluded_ids || []);
-        queryClient.setQueriesData({ queryKey: ['items'] }, (old: ItemListResponse | undefined) => {
-          if (!old) return old;
-          return {
-            ...old,
-            items: old.items.map((item) =>
-              !excludedSet.has(item.id)
-                ? {
-                    ...item,
-                    status: 'processing' as const,
-                    processing_kind: 'background_removal' as const,
-                  }
-                : item
-            ),
-          };
-        });
-      } else if (params.item_ids) {
-        const itemIdSet = new Set(params.item_ids);
-        queryClient.setQueriesData({ queryKey: ['items'] }, (old: ItemListResponse | undefined) => {
-          if (!old) return old;
-          return {
-            ...old,
-            items: old.items.map((item) =>
-              itemIdSet.has(item.id)
-                ? {
-                    ...item,
-                    status: 'processing' as const,
-                    processing_kind: 'background_removal' as const,
-                  }
-                : item
-            ),
-          };
-        });
-      }
-
-      return { previousData };
-    },
-    onError: (_err, _params, context) => {
-      // Rollback on error
-      if (context?.previousData) {
-        context.previousData.forEach(([queryKey, data]) => {
-          queryClient.setQueryData(queryKey, data);
-        });
-      }
-    },
-    onSettled: () => {
-      // Refetch to ensure consistency
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-    },
-  });
-}
-
-function uploadBulkItemsChunk(
+/** XHR is used instead of fetch so we can report upload progress. */
+function uploadBulkChunk(
   files: File[],
   skipAi: boolean,
-  token: string | null | undefined,
   onProgress: (percent: number) => void
 ): Promise<BulkUploadResponse> {
-  const formData = new FormData();
-  files.forEach((file) => {
-    formData.append('images', file);
-  });
-  formData.append('skip_ai', String(skipAi));
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    files.forEach((file) => formData.append('images', file));
+    formData.append('skip_ai', String(skipAi));
 
-  return new Promise<BulkUploadResponse>((resolve, reject) => {
+    const token = getAccessToken();
     const xhr = new XMLHttpRequest();
-
     xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) {
-        onProgress(Math.round((event.loaded / event.total) * 100));
-      }
+      if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100));
     });
-
     xhr.addEventListener('load', () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
-          const response = JSON.parse(xhr.responseText) as BulkUploadResponse;
-          resolve(response);
+          resolve(JSON.parse(xhr.responseText) as BulkUploadResponse);
         } catch {
           reject(new ApiError('Invalid response from server', xhr.status, {}));
         }
       } else {
-        let errorMessage = 'Failed to upload items';
+        let message = 'Failed to upload items';
         try {
-          const errorData = JSON.parse(xhr.responseText);
-          errorMessage = errorData.detail || errorMessage;
-          reject(new ApiError(errorMessage, xhr.status, errorData));
+          message = JSON.parse(xhr.responseText).detail || message;
         } catch {
-          reject(new ApiError(errorMessage, xhr.status, {}));
+          /* keep the default */
         }
+        reject(new ApiError(message, xhr.status, {}));
       }
     });
-
     xhr.addEventListener('error', () => {
-      if (!navigator.onLine) {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
         reject(new NetworkError('You appear to be offline. Please check your connection.'));
       } else {
-        reject(new NetworkError('Unable to connect to server. Please try again.'));
+        reject(new NetworkError('Unable to connect to the server. Please try again.'));
       }
     });
-
-    xhr.addEventListener('abort', () => {
-      reject(new NetworkError('Upload was cancelled.'));
-    });
+    xhr.addEventListener('abort', () => reject(new NetworkError('Upload was cancelled.')));
 
     xhr.open('POST', '/api/v1/items/bulk');
     xhr.withCredentials = true;
-    if (token) {
-      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-    }
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     xhr.send(formData);
   });
 }
 
 const BULK_LIMIT_ERROR = /^Maximum (\d+) images per bulk upload$/;
 
-// Same server-side cap upload-manager.ts's durable path works around: a
-// chunk sized for the default 20 gets the whole request rejected (not just
-// the excess files) on an instance where an admin lowered
-// MAX_BULK_UPLOAD_COUNT. Split and retry within the limit the server just
-// reported instead of failing every file in the chunk.
+/** Split a chunk that the server rejected for size, using the limit it reported. */
 export async function uploadFilesWithinServerLimit(
   files: File[],
   skipAi: boolean,
-  token: string | null | undefined,
   onProgress: (percent: number) => void
 ): Promise<BulkUploadResponse> {
   try {
-    return await uploadBulkItemsChunk(files, skipAi, token, onProgress);
+    return await uploadBulkChunk(files, skipAi, onProgress);
   } catch (error) {
     const match =
       error instanceof ApiError && error.status === 400
@@ -1127,7 +320,7 @@ export async function uploadFilesWithinServerLimit(
       const responses: BulkUploadResponse[] = [];
       for (let i = 0; i < files.length; i += limit) {
         responses.push(
-          await uploadFilesWithinServerLimit(files.slice(i, i + limit), skipAi, token, onProgress)
+          await uploadFilesWithinServerLimit(files.slice(i, i + limit), skipAi, onProgress)
         );
       }
       return mergeBulkUploadResponses(responses);
@@ -1148,36 +341,79 @@ export function mergeBulkUploadResponses(responses: BulkUploadResponse[]): BulkU
   );
 }
 
-export function tagProcessingLabel(
-  item: Pick<Item, 'ai_started_at' | 'processing_kind'>
-): 'queued' | 'analyzing' | 'removing_background' | 'rotating' {
-  if (item.processing_kind === 'background_removal') {
-    return 'removing_background';
-  }
-  if (item.processing_kind === 'rotate') {
-    return 'rotating';
-  }
-  return item.ai_started_at ? 'analyzing' : 'queued';
+function failedChunkResponse(files: File[], error: unknown): BulkUploadResponse {
+  const message =
+    error instanceof ApiError || error instanceof NetworkError
+      ? error.message
+      : 'Failed to upload items';
+  return {
+    total: files.length,
+    successful: 0,
+    failed: files.length,
+    results: files.map((file) => ({ filename: file.name, success: false, error: message })),
+  };
 }
 
-export function formatAnalyzingElapsed(aiStartedAt: string, now: number = Date.now()): string {
-  const elapsedSeconds = Math.max(0, Math.floor((now - new Date(aiStartedAt).getTime()) / 1000));
-  if (elapsedSeconds < 60) {
-    return `${elapsedSeconds}s`;
-  }
-  const minutes = Math.floor(elapsedSeconds / 60);
-  const seconds = elapsedSeconds % 60;
-  return `${minutes}m ${seconds}s`;
+/**
+ * Bulk upload. Upstream staged files in IndexedDB so a closed tab did not lose
+ * them; with synchronous analysis a chunk finishes in one request, so the
+ * durable queue is gone and progress is just "how many chunks are done".
+ */
+export function useBulkCreateItems() {
+  const queryClient = useQueryClient();
+  const [uploadProgress, setUploadProgress] = useState(0);
+
+  const mutation = useMutation({
+    mutationFn: async ({
+      files,
+      skipAi = false,
+    }: {
+      files: File[];
+      skipAi?: boolean;
+    }): Promise<BulkUploadResponse> => {
+      const chunks = chunkArray(files, BULK_UPLOAD_CHUNK_SIZE);
+      const responses: BulkUploadResponse[] = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkFiles = chunks[i];
+        try {
+          responses.push(
+            await uploadFilesWithinServerLimit(chunkFiles, skipAi, (chunkPercent) => {
+              setUploadProgress(Math.round(((i + chunkPercent / 100) / chunks.length) * 100));
+            })
+          );
+        } catch (error) {
+          responses.push(failedChunkResponse(chunkFiles, error));
+        }
+        setUploadProgress(Math.round(((i + 1) / chunks.length) * 100));
+      }
+      return mergeBulkUploadResponses(responses);
+    },
+    onMutate: () => setUploadProgress(0),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['items'] });
+      queryClient.invalidateQueries({ queryKey: ['tagging-progress'] });
+    },
+    onSettled: () => setUploadProgress(0),
+  });
+
+  return { ...mutation, uploadProgress };
+}
+
+/* ---- helpers kept for UI compatibility ---- */
+
+export function tagProcessingLabel(
+  item: Pick<Item, 'status'>
+): 'queued' | 'analyzing' | 'done' | 'failed' {
+  if (item.status === 'processing') return 'analyzing';
+  if (item.status === 'error') return 'failed';
+  if (item.status === 'ready') return 'done';
+  return 'queued';
 }
 
 export function formatDurationSeconds(seconds: number | null | undefined): string | null {
-  if (seconds === null || seconds === undefined) {
-    return null;
-  }
+  if (seconds === null || seconds === undefined) return null;
   const whole = Math.max(0, Math.round(seconds));
-  if (whole < 60) {
-    return `${whole}s`;
-  }
+  if (whole < 60) return `${whole}s`;
   return `${Math.floor(whole / 60)}m ${whole % 60}s`;
 }
 
@@ -1190,105 +426,14 @@ export interface QueueSummary {
 }
 
 export function deriveQueueSummary(progress?: TaggingProgress): QueueSummary {
-  const batchTotal = progress?.batch_total ?? 0;
-  const batchDone = progress?.batch_completed ?? 0;
-  const batchFailed = progress?.batch_failed ?? 0;
-  // Failures count toward the bar but not toward "analyzed", so a run that ends
-  // with some errors still fills rather than stalling short of the end.
-  const settled = batchDone + batchFailed;
+  const total = progress?.total ?? 0;
+  const done = progress?.completed ?? 0;
+  const failed = progress?.failed ?? 0;
   return {
-    batchTotal,
-    batchDone,
-    batchFailed,
+    batchTotal: total,
+    batchDone: done,
+    batchFailed: failed,
     remaining: progress?.processing ?? 0,
-    percentComplete: batchTotal > 0 ? Math.round((settled / batchTotal) * 100) : 0,
-  };
-}
-
-function failedChunkResponse(files: File[], error: unknown): BulkUploadResponse {
-  const message =
-    error instanceof ApiError || error instanceof NetworkError
-      ? error.message
-      : 'Failed to upload items';
-  return {
-    total: files.length,
-    successful: 0,
-    failed: files.length,
-    results: files.map((file) => ({
-      filename: file.name,
-      success: false,
-      error: message,
-    })),
-  };
-}
-
-export interface BulkStageResult {
-  // Count of files durably staged in the upload queue - already committed
-  // to IndexedDB and safe to close the tab on, even though the actual
-  // upload is still running in the background (see lib/upload-manager.ts).
-  staged: number;
-  // Real, synchronous upload results for files that couldn't be durably
-  // staged (e.g. IndexedDB quota exhaustion) and went through today's
-  // direct chunk-upload path instead. Null if every file was staged.
-  unprotected: BulkUploadResponse | null;
-}
-
-export function useBulkCreateItems() {
-  const queryClient = useQueryClient();
-  const { data: session } = useSession();
-  const [uploadProgress, setUploadProgress] = useState(0);
-
-  const mutation = useMutation({
-    mutationFn: async ({
-      files,
-      skipAi = false,
-    }: {
-      files: File[];
-      skipAi?: boolean;
-    }): Promise<BulkStageResult> => {
-      const { staged, unprotected: unprotectedFiles } = await enqueueFiles(files, skipAi);
-      if (staged.length > 0) {
-        void startDrain();
-      }
-
-      let unprotected: BulkUploadResponse | null = null;
-      if (unprotectedFiles.length > 0) {
-        const token = session?.accessToken || getAccessToken();
-        const chunks = chunkArray(unprotectedFiles, BULK_UPLOAD_CHUNK_SIZE);
-        const responses: BulkUploadResponse[] = [];
-
-        for (let i = 0; i < chunks.length; i++) {
-          const chunkFiles = chunks[i];
-          try {
-            const response = await uploadFilesWithinServerLimit(chunkFiles, skipAi, token, (chunkPercent) => {
-              const overall = ((i + chunkPercent / 100) / chunks.length) * 100;
-              setUploadProgress(Math.round(overall));
-            });
-            responses.push(response);
-          } catch (error) {
-            responses.push(failedChunkResponse(chunkFiles, error));
-          }
-          setUploadProgress(Math.round(((i + 1) / chunks.length) * 100));
-        }
-
-        unprotected = mergeBulkUploadResponses(responses);
-      }
-
-      return { staged: staged.length, unprotected };
-    },
-    onMutate: () => {
-      setUploadProgress(0);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-    },
-    onSettled: () => {
-      setUploadProgress(0);
-    },
-  });
-
-  return {
-    ...mutation,
-    uploadProgress,
+    percentComplete: total > 0 ? Math.round(((done + failed) / total) * 100) : 0,
   };
 }

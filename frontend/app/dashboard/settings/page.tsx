@@ -1,14 +1,17 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { useSession } from 'next-auth/react';
-import { Loader2, Save, RotateCcw, Check, Plus, Trash2, ChevronUp, ChevronDown, Server, MapPin, Navigation, Ruler } from 'lucide-react';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocale, useTranslations } from 'next-intl';
+import { Loader2, MapPin, Navigation, RotateCcw, Save, Server, Sparkles, Store } from 'lucide-react';
+import { toast } from 'sonner';
+
+import { api } from '@/lib/api';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Slider } from '@/components/ui/slider';
-import { Switch } from '@/components/ui/switch';
 import {
   Select,
   SelectContent,
@@ -16,1233 +19,433 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Badge } from '@/components/ui/badge';
-import { usePreferences, useUpdatePreferences, useResetPreferences, useTestAIEndpoint } from '@/lib/hooks/use-preferences';
-import { useUserProfile, useUpdateUserProfile } from '@/lib/hooks/use-user';
+import { useOccasions } from '@/lib/hooks/use-translated-constants';
 import {
-  getNetworkLocationUrl,
-  formatReverseGeocodedLocation,
-  isNetworkLocationFallbackEnabled,
-  resolveNetworkLocation,
-} from '@/lib/location';
-import { Preferences, StyleProfile, AIEndpoint } from '@/lib/types';
-import { useClothingColors, useOccasions } from '@/lib/hooks/use-translated-constants';
-import { toF, toCelsius } from '@/lib/temperature';
-import { toast } from 'sonner';
-import { useTranslations } from 'next-intl';
+  DEFAULT_PREFERENCES,
+  usePreferences,
+  useResetPreferences,
+  useUpdatePreferences,
+} from '@/lib/hooks/use-preferences';
+import { useUpdateUserProfile, useUserProfile } from '@/lib/hooks/use-user';
 
-const CM_TO_IN = 0.393701;
-const IN_TO_CM = 2.54;
-const KG_TO_LBS = 2.20462;
-const LBS_TO_KG = 0.453592;
+/**
+ * Settings for the trial build.
+ *
+ * Everything the full product kept here that needed another service - the
+ * style profile, body measurements, notification thresholds, per-user AI
+ * endpoint keys, password/OIDC account controls - is gone. What survives is
+ * the small set of values the trial's API really reads: display name,
+ * location (for weather), default occasion and the temperature unit. AI
+ * configuration itself is env-only, so this page *reports* it rather than
+ * editing it; the keys never reach the browser.
+ */
 
-function convertMeasurement(value: number, key: string, from: string, to: string): number {
-  if (from === to) return value;
-  const isWeight = key === 'weight';
-  if (from === 'metric' && to === 'imperial') {
-    return Math.round((isWeight ? value * KG_TO_LBS : value * CM_TO_IN) * 10) / 10;
-  }
-  return Math.round((isWeight ? value * LBS_TO_KG : value * IN_TO_CM) * 10) / 10;
-}
-
-const BODY_MEASUREMENT_FIELDS = [
-  { key: 'height', unitMetric: 'cm', unitImperial: 'in', exampleMetric: '178', exampleImperial: '70' },
-  { key: 'weight', unitMetric: 'kg', unitImperial: 'lbs', exampleMetric: '75', exampleImperial: '165' },
-  { key: 'chest', unitMetric: 'cm', unitImperial: 'in', exampleMetric: '96', exampleImperial: '38' },
-  { key: 'waist', unitMetric: 'cm', unitImperial: 'in', exampleMetric: '82', exampleImperial: '32' },
-  { key: 'hips', unitMetric: 'cm', unitImperial: 'in', exampleMetric: '98', exampleImperial: '39' },
-  { key: 'inseam', unitMetric: 'cm', unitImperial: 'in', exampleMetric: '81', exampleImperial: '32' },
-] as const;
-
-const NUMERIC_MEASUREMENT_KEYS: readonly string[] = BODY_MEASUREMENT_FIELDS.map((f) => f.key);
-
-function getErrorMessage(e: unknown, fallback: string): string {
-  if (e instanceof Error) return e.message;
-  return fallback;
-}
-
-interface EndpointTestResult {
-  status: 'connected' | 'error' | 'testing' | null;
-  models?: string[];
-  visionModels?: string[];
-  textModels?: string[];
-  error?: string;
-}
-
-function ColorPicker({
-  selected,
-  onChange,
-  label,
-}: {
-  selected: string[];
-  onChange: (colors: string[]) => void;
-  label: string;
-}) {
-  const clothingColors = useClothingColors();
-
-  const toggleColor = (color: string) => {
-    if (selected.includes(color)) {
-      onChange(selected.filter((c) => c !== color));
-    } else {
-      onChange([...selected, color]);
-    }
+interface Capabilities {
+  ai: {
+    vision: boolean;
+    text: boolean;
+    provider: string | null;
+    vision_models: string[];
+    text_models: string[];
+    reachability: { ok: boolean; message?: string; detail?: string };
   };
-
-  return (
-    <div className="space-y-2">
-      <Label>{label}</Label>
-      <div className="flex flex-wrap gap-2">
-        {clothingColors.map((color) => {
-          const isSelected = selected.includes(color.value);
-          return (
-            <button
-              key={color.value}
-              type="button"
-              onClick={() => toggleColor(color.value)}
-              className={`w-8 h-8 rounded-full border-2 transition-all ${
-                isSelected
-                  ? 'border-primary ring-2 ring-primary/30 scale-110'
-                  : 'border-muted-foreground/20 hover:border-muted-foreground/40'
-              }`}
-              style={{ backgroundColor: color.hex }}
-              title={color.name}
-            >
-              {isSelected && (
-                <Check
-                  className={`h-4 w-4 mx-auto ${
-                    color.value === 'white' || color.value === 'yellow' || color.value === 'beige'
-                      ? 'text-black'
-                      : 'text-white'
-                  }`}
-                />
-              )}
-            </button>
-          );
-        })}
-      </div>
-      {selected.length > 0 && (
-        <div className="flex flex-wrap gap-1 mt-2">
-          {selected.map((color) => {
-            const colorInfo = clothingColors.find((c) => c.value === color);
-            return (
-              <Badge key={color} variant="secondary" className="gap-1">
-                <div
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: colorInfo?.hex }}
-                />
-                {colorInfo?.name}
-              </Badge>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
+  features: Record<string, boolean>;
+  auth: { required: boolean };
+  storage: { s3: boolean; persistent: boolean };
+  version: string;
 }
 
-function StyleSlider({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <div className="space-y-2">
-      <div className="flex justify-between items-center">
-        <Label>{label}</Label>
-        <span className="text-sm text-muted-foreground">{value}%</span>
-      </div>
-      <Slider
-        value={[value]}
-        onValueChange={(vals) => onChange(vals[0])}
-        min={0}
-        max={100}
-        step={10}
-      />
-    </div>
-  );
+interface AuthStatus {
+  auth_required: boolean;
+  mode: string;
+  ai_configured: boolean;
+  storage: string;
+}
+
+interface WeatherPreview {
+  temperature?: number;
+  temperature_unit?: string;
+  condition?: string;
+  location?: string;
+  detail?: string;
+}
+
+function toF(c: number) {
+  return Math.round(c * 1.8 + 32);
 }
 
 export default function SettingsPage() {
   const t = useTranslations('settings');
   const tc = useTranslations('common');
-  const tConst = useTranslations('constants');
+  const locale = useLocale();
   const occasions = useOccasions();
-  const { data: session } = useSession();
-  const { data: preferences, isLoading } = usePreferences();
-  const { data: userProfile, isLoading: isLoadingProfile } = useUserProfile();
-  const updatePreferences = useUpdatePreferences();
-  const resetPreferences = useResetPreferences();
-  const testEndpoint = useTestAIEndpoint();
-  const updateUserProfile = useUpdateUserProfile();
 
-  const [formData, setFormData] = useState<Partial<Preferences>>({});
-  const [hasChanges, setHasChanges] = useState(false);
-  const [endpointTests, setEndpointTests] = useState<Record<number, EndpointTestResult>>({});
+  const queryClient = useQueryClient();
+  const { data: profile } = useUserProfile();
+  const updateProfile = useUpdateUserProfile();
+  const { data: prefs } = usePreferences();
+  const updatePrefs = useUpdatePreferences();
+  const resetPrefs = useResetPreferences();
 
-  // Location and timezone state
-  const [locationName, setLocationName] = useState('');
-  const [locationLat, setLocationLat] = useState('');
-  const [locationLon, setLocationLon] = useState('');
-  const [timezone, setTimezone] = useState('UTC');
-  const [isGettingLocation, setIsGettingLocation] = useState(false);
-
-  // Body measurements state
-  type UnitSystem = 'metric' | 'imperial';
-  const [measurements, setMeasurements] = useState<Record<string, string>>({});
-  const [measurementsDirty, setMeasurementsDirty] = useState(false);
-  const [unitSystem, setUnitSystem] = useState<UnitSystem>(() => {
-    if (typeof window !== 'undefined') {
-      return (localStorage.getItem('wardrowbe_unit_system') as UnitSystem) || 'metric';
-    }
-    return 'metric';
+  const { data: caps } = useQuery({
+    queryKey: ['capabilities'],
+    queryFn: () => api.get<Capabilities>('/capabilities'),
+    staleTime: 60_000,
   });
-  const unitSystemRef = useRef(unitSystem);
+  const { data: authStatus } = useQuery({
+    queryKey: ['auth-status'],
+    queryFn: () => api.get<AuthStatus>('/auth/status'),
+    staleTime: 5 * 60_000,
+  });
 
-  useEffect(() => {
-    unitSystemRef.current = unitSystem;
-  }, [unitSystem]);
+  const [displayName, setDisplayName] = useState<string | null>(null);
+  const [locationName, setLocationName] = useState<string | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (userProfile) {
-      setLocationName(userProfile.location_name || '');
-      setLocationLat(userProfile.location_lat?.toString() || '');
-      setLocationLon(userProfile.location_lon?.toString() || '');
-      setTimezone(userProfile.timezone || 'UTC');
+  const name = displayName ?? profile?.display_name ?? '';
+  const city = locationName ?? profile?.location_name ?? '';
 
-      if (userProfile.body_measurements) {
-        const initial: Record<string, string> = {};
-        const displayUnitSystem = unitSystemRef.current;
-        for (const [key, value] of Object.entries(userProfile.body_measurements)) {
-          if (NUMERIC_MEASUREMENT_KEYS.includes(key) && typeof value === 'number') {
-            const converted = convertMeasurement(value, key, 'metric', displayUnitSystem);
-            initial[key] = String(converted);
-          } else {
-            initial[key] = String(value);
-          }
-        }
-        setMeasurements(initial);
-      }
-    }
-  }, [userProfile]);
-
-  const detectLocationFromNetwork = async () => {
-    const response = await fetch(getNetworkLocationUrl(), {
-      headers: { Accept: 'application/json' },
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        t('location.errors.networkLookupFailed', {
-          status: `${response.status}${response.statusText ? ` ${response.statusText}` : ''}`,
-        })
-      );
-    }
-
-    const data = await response.json();
-    const resolved = resolveNetworkLocation(data, timezone);
-    setLocationLat(resolved.lat);
-    setLocationLon(resolved.lon);
-    if (resolved.locationName) {
-      setLocationName(resolved.locationName);
-    }
-    if (resolved.timezone) {
-      setTimezone(resolved.timezone);
-    }
-    return resolved;
-  };
-
-  const describeGeolocationFailure = (error: GeolocationPositionError): string => {
-    switch (error.code) {
-      case error.PERMISSION_DENIED:
-        return t('location.errors.geolocationDenied');
-      case error.POSITION_UNAVAILABLE:
-        return t('location.errors.geolocationUnavailable');
-      case error.TIMEOUT:
-        return t('location.errors.geolocationTimeout');
-      default:
-        return error.message
-          ? t('location.errors.geolocationFailed', { message: error.message })
-          : t('location.errors.geolocationFailedGeneric');
-    }
-  };
-
-  const handleGetCurrentLocation = () => {
-    setIsGettingLocation(true);
-    const finalizeFromCoordinates = async (lat: string, lon: string) => {
-      // Reverse geocode to get city name
-      try {
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`,
-          { headers: { 'User-Agent': 'WardrobeAI/1.0' } }
-        );
-        if (response.ok) {
-          const data = await response.json();
-          const nextLocationName = formatReverseGeocodedLocation(data);
-          if (nextLocationName) {
-            setLocationName(nextLocationName);
-            return nextLocationName;
-          }
-        }
-      } catch {
-        // Ignore geocoding errors, we still have coordinates
-      }
-
-      return undefined;
-    };
-
-    const fallbackToNetworkLocation = async (reason?: string) => {
-      if (!isNetworkLocationFallbackEnabled()) {
-        toast.error(reason || t('location.errors.unableToDetect'));
-        setIsGettingLocation(false);
-        return;
-      }
-      try {
-        await detectLocationFromNetwork();
-        toast.success(
-          reason
-            ? t('location.approximateDetectedWithReason', { reason })
-            : t('location.approximateDetected')
-        );
-      } catch (fallbackError) {
-        const fallbackMessage = fallbackError instanceof Error
-          ? fallbackError.message
-          : t('location.errors.unableToDetect');
-        toast.error(fallbackMessage);
-      } finally {
-        setIsGettingLocation(false);
-      }
-    };
-
-    if (!navigator.geolocation) {
-      void fallbackToNetworkLocation(t('location.errors.geolocationUnsupported'));
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const lat = position.coords.latitude.toFixed(6);
-        const lon = position.coords.longitude.toFixed(6);
-        setLocationLat(lat);
-        setLocationLon(lon);
-        await finalizeFromCoordinates(lat, lon);
-        setIsGettingLocation(false);
-        toast.success(t('location.detected'));
-      },
-      (error) => {
-        void fallbackToNetworkLocation(describeGeolocationFailure(error));
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
-  };
-
-  const handleSaveLocation = async () => {
-    const lat = parseFloat(locationLat);
-    const lon = parseFloat(locationLon);
-
-    if (isNaN(lat) || isNaN(lon)) {
-      toast.error(t('location.errors.invalidCoordinates'));
-      return;
-    }
-
-    if (lat < -90 || lat > 90) {
-      toast.error(t('location.errors.latitudeRange'));
-      return;
-    }
-
-    if (lon < -180 || lon > 180) {
-      toast.error(t('location.errors.longitudeRange'));
-      return;
-    }
-
+  const saveProfile = async () => {
     try {
-      await updateUserProfile.mutateAsync({
-        location_lat: lat,
-        location_lon: lon,
-        location_name: locationName || undefined,
-        timezone: timezone,
-      });
+      await updateProfile.mutateAsync({ display_name: name });
       toast.success(t('location.saved'));
-    } catch {
-      toast.error(t('location.errors.saveFailed'));
-    }
-  };
-
-  const hasLocationChanges = userProfile && (
-    locationName !== (userProfile.location_name || '') ||
-    locationLat !== (userProfile.location_lat?.toString() || '') ||
-    locationLon !== (userProfile.location_lon?.toString() || '') ||
-    timezone !== (userProfile.timezone || 'UTC')
-  );
-
-  const isDirty = hasChanges || measurementsDirty || !!hasLocationChanges;
-
-  useEffect(() => {
-    if (!isDirty) return;
-
-    const onBeforeUnload = (e: BeforeUnloadEvent) => e.preventDefault();
-    window.addEventListener('beforeunload', onBeforeUnload);
-
-    const origPush = history.pushState.bind(history);
-    history.pushState = function (...args) {
-      if (window.confirm(t('unsavedChanges'))) {
-        origPush(...args);
-      }
-    };
-
-    return () => {
-      window.removeEventListener('beforeunload', onBeforeUnload);
-      history.pushState = origPush;
-    };
-  }, [isDirty]);
-
-  const handleToggleUnits = () => {
-    const newSystem: UnitSystem = unitSystem === 'metric' ? 'imperial' : 'metric';
-    const converted: Record<string, string> = {};
-    for (const [key, value] of Object.entries(measurements)) {
-      const trimmed = value.trim();
-      if (!trimmed) { converted[key] = value; continue; }
-      if (NUMERIC_MEASUREMENT_KEYS.includes(key)) {
-        const num = parseFloat(trimmed);
-        if (!isNaN(num)) {
-          converted[key] = String(convertMeasurement(num, key, unitSystem, newSystem));
-          continue;
-        }
-      }
-      converted[key] = value;
-    }
-    setMeasurements(converted);
-    setUnitSystem(newSystem);
-    localStorage.setItem('wardrowbe_unit_system', newSystem);
-  };
-
-  const handleMeasurementChange = (key: string, value: string) => {
-    setMeasurements((prev) => ({ ...prev, [key]: value }));
-    setMeasurementsDirty(true);
-  };
-
-  const handleSaveMeasurements = async () => {
-    const parsed: Record<string, number | string> = {};
-    for (const [key, value] of Object.entries(measurements)) {
-      const trimmed = value.trim();
-      if (!trimmed) continue;
-      if (NUMERIC_MEASUREMENT_KEYS.includes(key)) {
-        const num = parseFloat(trimmed);
-        if (isNaN(num) || num <= 0) {
-          toast.error(t('body.errors.positiveNumber', { field: t(`body.fields.${key}`) }));
-          return;
-        }
-        parsed[key] = convertMeasurement(num, key, unitSystem, 'metric');
-      } else {
-        parsed[key] = trimmed;
-      }
-    }
-    try {
-      await updateUserProfile.mutateAsync({
-        body_measurements: Object.keys(parsed).length > 0 ? parsed : null,
-      });
-      setMeasurementsDirty(false);
-      toast.success(t('body.saved'));
-    } catch (e) {
-      toast.error(getErrorMessage(e, t('body.saveError')));
-    }
-  };
-
-  const handleTestEndpoint = async (index: number, url: string) => {
-    setEndpointTests((prev) => ({ ...prev, [index]: { status: 'testing' } }));
-    try {
-      const result = await testEndpoint.mutateAsync(url);
-      setEndpointTests((prev) => ({
-        ...prev,
-        [index]: {
-          status: result.status,
-          models: result.available_models,
-          visionModels: result.vision_models,
-          textModels: result.text_models,
-          error: result.error,
-        },
-      }));
     } catch (error) {
-      setEndpointTests((prev) => ({
-        ...prev,
-        [index]: { status: 'error', error: t('aiEndpoints.testFailed') },
-      }));
+      toast.error(error instanceof Error ? error.message : String(error));
     }
   };
 
-  useEffect(() => {
-    if (preferences) {
-      setFormData(preferences);
-      setHasChanges(false);
+  const saveCity = async () => {
+    setPreviewError(null);
+    setPreview(null);
+    try {
+      await api.post('/users/me/location', { location: city });
+      setLocationName(city);
+      setPreviewError(null);
+      toast.success(t('location.saved'));
+      // Refetch the profile so the coordinates the server resolved from the
+      // name show up in the readout below and everywhere else.
+      await queryClient.invalidateQueries({ queryKey: ['user-profile'] });
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : String(error));
     }
-  }, [preferences]);
-
-  const updateField = <K extends keyof Preferences>(key: K, value: Preferences[K]) => {
-    setFormData((prev) => {
-      const next = { ...prev, [key]: value };
-      if (key === 'color_favorites' && Array.isArray(value)) {
-        next.color_avoid = (prev.color_avoid || []).filter(
-          (c) => !(value as string[]).includes(c)
-        );
-      } else if (key === 'color_avoid' && Array.isArray(value)) {
-        next.color_favorites = (prev.color_favorites || []).filter(
-          (c) => !(value as string[]).includes(c)
-        );
-      }
-      return next;
-    });
-    setHasChanges(true);
   };
 
-  const updateStyleProfile = (key: keyof StyleProfile, value: number) => {
-    setFormData((prev) => ({
-      ...prev,
-      style_profile: {
-        ...(prev.style_profile || {
-          casual: 50,
-          formal: 50,
-          sporty: 50,
-          minimalist: 50,
-          bold: 50,
-        }),
-        [key]: value,
+  const detectLocation = () => {
+    if (!navigator.geolocation) {
+      setPreviewError(t('location.errors.geolocationUnsupported'));
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          await api.post('/users/me/location', { latitude, longitude });
+          setLocationName(`${latitude.toFixed(2)}, ${longitude.toFixed(2)}`);
+          toast.success(t('location.detected'));
+          await queryClient.invalidateQueries({ queryKey: ['user-profile'] });
+        } catch (error) {
+          setPreviewError(error instanceof Error ? error.message : String(error));
+        } finally {
+          setLocating(false);
+        }
       },
-    }));
-    setHasChanges(true);
-  };
-
-  const handleSave = async () => {
-    try {
-      await updatePreferences.mutateAsync(formData);
-      setHasChanges(false);
-    } catch (error) {
-      console.error('Failed to save preferences:', error);
-    }
-  };
-
-  const handleReset = async () => {
-    if (confirm(t('confirmReset'))) {
-      try {
-        await resetPreferences.mutateAsync();
-      } catch (error) {
-        console.error('Failed to reset preferences:', error);
-      }
-    }
-  };
-
-  if (isLoading || isLoadingProfile) {
-    return (
-      <div className="flex items-center justify-center py-16">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
+      () => {
+        setLocating(false);
+        setPreviewError(t('location.errors.geolocationDenied'));
+      },
+      { timeout: 10_000 }
     );
-  }
+  };
+
+  const testWeather = async () => {
+    setPreviewError(null);
+    setPreview(null);
+    try {
+      const body: Record<string, number | string> = city ? { location: city } : {};
+      const w = await api.post<WeatherPreview>('/weather/preview', body);
+      const celsius = typeof w.temperature === 'number' ? w.temperature : null;
+      const temp =
+        celsius === null
+          ? ''
+          : `${(prefs?.temperature_unit ?? 'celsius') === 'fahrenheit' ? toF(celsius) : Math.round(celsius)}°${
+              (prefs?.temperature_unit ?? 'celsius') === 'fahrenheit' ? 'F' : 'C'
+            }`;
+      setPreview([w.location, w.condition, temp].filter(Boolean).join(' · ') || JSON.stringify(w));
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : String(error));
+    }
+  };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t('title')}</h1>
-          <p className="text-sm text-muted-foreground">
-            {t('subtitle')}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleReset} disabled={resetPreferences.isPending}>
-            <RotateCcw className="mr-2 h-4 w-4" />
+    <div className="max-w-2xl mx-auto space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">{t('title')}</h1>
+        <p className="text-sm text-muted-foreground">{t('subtitle')}</p>
+      </div>
+
+      {/* ------------------------------------------------------- account --- */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{t('account.title')}</CardTitle>
+          <CardDescription>{t('account.description')}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="display-name">{t('account.name')}</Label>
+            <div className="flex gap-2">
+              <Input
+                id="display-name"
+                value={name}
+                onChange={(e) => setDisplayName(e.target.value)}
+                maxLength={100}
+              />
+              <Button
+                variant="outline"
+                onClick={saveProfile}
+                disabled={updateProfile.isPending || name === (profile?.display_name ?? '')}
+              >
+                {updateProfile.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t('account.email')}: {profile?.email ?? 'demo@wardrowbe.local'}
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>{t('account.language', { defaultValue: 'Language' })}</Label>
+            <p className="text-sm text-muted-foreground">
+              {locale} — {t('account.languageNote', {
+                defaultValue: 'The trial ships with English strings only.',
+              })}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* -------------------------------------------------------- location --- */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <MapPin className="h-4 w-4" />
+            {t('location.cityLabel')}
+          </CardTitle>
+          <CardDescription>{t('location.description')}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex gap-2">
+            <Input
+              value={city}
+              placeholder={t('location.cityPlaceholder')}
+              onChange={(e) => setLocationName(e.target.value)}
+              className="flex-1"
+            />
+            <Button variant="outline" onClick={saveCity} disabled={!city.trim()}>
+              {t('location.saveLocation')}
+            </Button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="ghost" size="sm" onClick={detectLocation} disabled={locating}>
+              {locating ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Navigation className="h-4 w-4 mr-2" />
+              )}
+              {t('location.useMyLocation')}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={testWeather}>
+              {t('location.test', { defaultValue: 'Check weather' })}
+            </Button>
+          </div>
+          {preview && (
+            <p className="text-sm text-muted-foreground rounded-md border bg-muted/40 px-3 py-2">
+              {preview}
+            </p>
+          )}
+          {previewError && <p className="text-sm text-destructive">{previewError}</p>}
+          {profile?.location_lat != null && profile?.location_lon != null && (
+            <p className="text-xs text-muted-foreground">
+              {t('location.latitude')}: {profile.location_lat?.toFixed(3)} ·{' '}
+              {t('location.longitude')}: {profile.location_lon?.toFixed(3)}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* --------------------------------------------------- recommendations --- */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{t('recommendations.title')}</CardTitle>
+          <CardDescription>{t('recommendations.description')}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>{t('recommendations.defaultOccasion')}</Label>
+            <Select
+              value={prefs?.default_occasion ?? DEFAULT_PREFERENCES.default_occasion}
+              onValueChange={(value) => updatePrefs.mutate({ default_occasion: value })}
+            >
+              <SelectTrigger className="w-[220px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {occasions.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>{t('temperature.unit')}</Label>
+            <Select
+              value={prefs?.temperature_unit ?? DEFAULT_PREFERENCES.temperature_unit}
+              onValueChange={(value) =>
+                updatePrefs.mutate({ temperature_unit: value as 'celsius' | 'fahrenheit' })
+              }
+            >
+              <SelectTrigger className="w-[220px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="celsius">{t('temperature.celsius')}</SelectItem>
+                <SelectItem value="fahrenheit">{t('temperature.fahrenheit')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => resetPrefs.mutate()}
+            disabled={resetPrefs.isPending}
+          >
+            <RotateCcw className="h-4 w-4 mr-2" />
             {t('reset')}
           </Button>
-          <Button size="sm" onClick={handleSave} disabled={!hasChanges || updatePreferences.isPending}>
-            {updatePreferences.isPending ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Save className="mr-2 h-4 w-4" />
-            )}
-            {tc('save')}
-          </Button>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
-      <div className="grid gap-6">
-        {/* Account Section */}
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('account.title')}</CardTitle>
-            <CardDescription>{t('account.description')}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>{t('account.name')}</Label>
-                <Input value={userProfile?.display_name || ''} disabled />
-              </div>
-              <div className="space-y-2">
-                <Label>{t('account.email')}</Label>
-                <Input value={userProfile?.email || ''} disabled />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      {/* --------------------------------------------------------------- AI --- */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Sparkles className="h-4 w-4" />
+            {t('ai.title', { defaultValue: 'AI provider' })}
+          </CardTitle>
+          <CardDescription>
+            {t('ai.description', {
+              defaultValue:
+                'The trial reads its AI credentials from the server environment, so they can be rotated without a rebuild and never reach the browser.',
+            })}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">{t('ai.status', { defaultValue: 'Status' })}</span>
+            <Badge variant={caps?.ai.vision ? 'default' : 'destructive'}>
+              {caps?.ai.vision
+                ? t('ai.configured', { defaultValue: 'Configured' })
+                : t('ai.missing', { defaultValue: 'No API key set' })}
+            </Badge>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">{t('ai.reachability', { defaultValue: 'Reachable' })}</span>
+            <span className="truncate max-w-[60%]" title={caps?.ai.reachability?.message ?? ''}>
+              {caps?.ai.reachability?.ok ? 'ok' : (caps?.ai.reachability?.message ?? '…')}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">{t('ai.baseUrl', { defaultValue: 'Base URL' })}</span>
+            <code className="text-xs truncate max-w-[60%]">{caps?.ai.provider ?? '—'}</code>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">
+              {t('ai.visionModels', { defaultValue: 'Vision models' })}
+            </span>
+            <code className="text-xs truncate max-w-[60%]">
+              {caps?.ai.vision_models?.join(', ') || '—'}
+            </code>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">
+              {t('ai.textModels', { defaultValue: 'Text models' })}
+            </span>
+            <code className="text-xs truncate max-w-[60%]">
+              {caps?.ai.text_models?.join(', ') || '—'}
+            </code>
+          </div>
+          {!caps?.ai.vision && (
+            <p className="text-xs text-muted-foreground">
+              {t('ai.howTo', {
+                defaultValue:
+                  'Set AI_API_KEY (and AI_BASE_URL / AI_VISION_MODEL if you are not using the default provider) on the server and restart it.',
+              })}
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
-        {/* Location Section */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <MapPin className="h-5 w-5" />
-              {t('location.title')}
-            </CardTitle>
-            <CardDescription>
-              {t('location.description')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label>{t('location.cityLabel')}</Label>
-              <Input
-                value={locationName}
-                onChange={(e) => setLocationName(e.target.value)}
-                placeholder={t('location.cityPlaceholder')}
-              />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>{t('location.latitude')}</Label>
-                <Input
-                  type="number"
-                  step="0.000001"
-                  value={locationLat}
-                  onChange={(e) => setLocationLat(e.target.value)}
-                  placeholder={tc('example', { value: '51.5074' })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>{t('location.longitude')}</Label>
-                <Input
-                  type="number"
-                  step="0.000001"
-                  value={locationLon}
-                  onChange={(e) => setLocationLon(e.target.value)}
-                  placeholder={tc('example', { value: '-0.1278' })}
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>{t('location.timezone')}</Label>
-              <Select value={timezone} onValueChange={setTimezone}>
-                <SelectTrigger>
-                  <SelectValue placeholder={t('location.selectTimezone')} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="UTC">{tConst('timezones.UTC')}</SelectItem>
-                  <SelectItem value="America/New_York">{tConst('timezones.America/New_York')}</SelectItem>
-                  <SelectItem value="America/Chicago">{tConst('timezones.America/Chicago')}</SelectItem>
-                  <SelectItem value="America/Denver">{tConst('timezones.America/Denver')}</SelectItem>
-                  <SelectItem value="America/Los_Angeles">{tConst('timezones.America/Los_Angeles')}</SelectItem>
-                  <SelectItem value="Europe/London">{tConst('timezones.Europe/London')}</SelectItem>
-                  <SelectItem value="Europe/Paris">{tConst('timezones.Europe/Paris')}</SelectItem>
-                  <SelectItem value="Europe/Berlin">{tConst('timezones.Europe/Berlin')}</SelectItem>
-                  <SelectItem value="Asia/Tokyo">{tConst('timezones.Asia/Tokyo')}</SelectItem>
-                  <SelectItem value="Asia/Shanghai">{tConst('timezones.Asia/Shanghai')}</SelectItem>
-                  <SelectItem value="Asia/Kolkata">{tConst('timezones.Asia/Kolkata')}</SelectItem>
-                  <SelectItem value="Asia/Kathmandu">{tConst('timezones.Asia/Kathmandu')}</SelectItem>
-                  <SelectItem value="Asia/Dubai">{tConst('timezones.Asia/Dubai')}</SelectItem>
-                  <SelectItem value="Australia/Sydney">{tConst('timezones.Australia/Sydney')}</SelectItem>
-                  <SelectItem value="Pacific/Auckland">{tConst('timezones.Pacific/Auckland')}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                onClick={handleGetCurrentLocation}
-                disabled={isGettingLocation}
-              >
-                {isGettingLocation ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : (
-                  <Navigation className="h-4 w-4 mr-2" />
-                )}
-                {t('location.useMyLocation')}
-              </Button>
-              <Button
-                onClick={handleSaveLocation}
-                disabled={!hasLocationChanges || updateUserProfile.isPending}
-              >
-                {updateUserProfile.isPending ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : (
-                  <Save className="h-4 w-4 mr-2" />
-                )}
-                {t('location.saveLocation')}
-              </Button>
-            </div>
-            {!locationLat && !locationLon && (
-              <p className="text-sm text-amber-600 dark:text-amber-400">
-                {t('location.required')}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Body Measurements */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Ruler className="h-5 w-5" />
-              {t('body.title')}
-            </CardTitle>
-            <CardDescription>{t('body.description')}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="flex items-center justify-between">
-              <Label>{t('body.unitSystem')}</Label>
-              <Button variant="outline" size="sm" onClick={handleToggleUnits}>
-                {unitSystem === 'metric' ? t('body.metric') : t('body.imperial')}
-              </Button>
-            </div>
-
-            <div>
-              <Label className="text-muted-foreground mb-3 block">{t('body.bodyLabel')}</Label>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {BODY_MEASUREMENT_FIELDS.map((field) => {
-                  const unit = unitSystem === 'metric' ? field.unitMetric : field.unitImperial;
-                  const placeholder = tc('example', { value: unitSystem === 'metric' ? field.exampleMetric : field.exampleImperial });
-                  return (
-                    <div key={field.key} className="space-y-1">
-                      <Label className="text-sm">{t(`body.fields.${field.key}`)}</Label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="number"
-                          step="0.1"
-                          min="0"
-                          value={measurements[field.key] ?? ''}
-                          onChange={(e) => handleMeasurementChange(field.key, e.target.value)}
-                          placeholder={placeholder}
-                          className="flex-1"
-                        />
-                        <span className="text-sm text-muted-foreground min-w-[2rem] text-center">{unit}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
-              <Label className="text-muted-foreground mb-3 block">{t('body.sizesLabel')}</Label>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {Object.entries({
-                  shirt_size: t('body.sizeFields.shirtSize'),
-                  pants_size: t('body.sizeFields.pantsSize'),
-                  dress_size: t('body.sizeFields.dressSize'),
-                  shoe_size: t('body.sizeFields.shoeSize'),
-                }).map(([key, label]) => (
-                  <div key={key} className="space-y-1">
-                    <Label className="text-sm">{label}</Label>
-                    <Input
-                      value={measurements[key] ?? ''}
-                      onChange={(e) => handleMeasurementChange(key, e.target.value)}
-                      placeholder={t(`body.sizePlaceholders.${key}`)}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {measurementsDirty && (
-              <Button
-                onClick={handleSaveMeasurements}
-                disabled={updateUserProfile.isPending}
-                size="sm"
-              >
-                {updateUserProfile.isPending ? (
-                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{tc('saving')}</>
-                ) : (
-                  <><Save className="mr-2 h-4 w-4" />{t('body.saveMeasurements')}</>
-                )}
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Color Preferences */}
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('colors.favoriteColors')}</CardTitle>
-            <CardDescription>
-              {t('colors.description')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <ColorPicker
-              label={t('colors.favoriteColors')}
-              selected={formData.color_favorites || []}
-              onChange={(colors) => updateField('color_favorites', colors)}
-            />
-            <ColorPicker
-              label={t('colors.colorsToAvoid')}
-              selected={formData.color_avoid || []}
-              onChange={(colors) => updateField('color_avoid', colors)}
-            />
-          </CardContent>
-        </Card>
-
-        {/* Style Profile */}
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('styleProfile.title')}</CardTitle>
-            <CardDescription>
-              {t('styleProfile.description')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <StyleSlider
-              label={tConst('styles.casual')}
-              value={formData.style_profile?.casual ?? 50}
-              onChange={(v) => updateStyleProfile('casual', v)}
-            />
-            <StyleSlider
-              label={tConst('styles.formal')}
-              value={formData.style_profile?.formal ?? 50}
-              onChange={(v) => updateStyleProfile('formal', v)}
-            />
-            <StyleSlider
-              label={tConst('styles.sporty')}
-              value={formData.style_profile?.sporty ?? 50}
-              onChange={(v) => updateStyleProfile('sporty', v)}
-            />
-            <StyleSlider
-              label={tConst('styles.minimalist')}
-              value={formData.style_profile?.minimalist ?? 50}
-              onChange={(v) => updateStyleProfile('minimalist', v)}
-            />
-            <StyleSlider
-              label={tConst('styles.bold')}
-              value={formData.style_profile?.bold ?? 50}
-              onChange={(v) => updateStyleProfile('bold', v)}
-            />
-          </CardContent>
-        </Card>
-
-        {/* Temperature & Comfort */}
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('temperature.title')}</CardTitle>
-            <CardDescription>
-              {t('temperature.description')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>{t('temperature.unit')}</Label>
-                <Select
-                  value={formData.temperature_unit || 'celsius'}
-                  onValueChange={(v) =>
-                    updateField('temperature_unit', v as 'celsius' | 'fahrenheit')
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="celsius">{t('temperature.celsius')}</SelectItem>
-                    <SelectItem value="fahrenheit">{t('temperature.fahrenheit')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>{t('temperature.sensitivity')}</Label>
-                <Select
-                  value={formData.temperature_sensitivity || 'normal'}
-                  onValueChange={(v) =>
-                    updateField('temperature_sensitivity', v as 'low' | 'normal' | 'high')
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="low">{t('temperature.sensitivityOptions.low')}</SelectItem>
-                    <SelectItem value="normal">{t('temperature.sensitivityOptions.normal')}</SelectItem>
-                    <SelectItem value="high">{t('temperature.sensitivityOptions.high')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>{t('temperature.layering')}</Label>
-                <Select
-                  value={formData.layering_preference || 'moderate'}
-                  onValueChange={(v) =>
-                    updateField('layering_preference', v as 'minimal' | 'moderate' | 'heavy')
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="minimal">{t('temperature.layeringOptions.minimal')}</SelectItem>
-                    <SelectItem value="moderate">{t('temperature.layeringOptions.moderate')}</SelectItem>
-                    <SelectItem value="heavy">{t('temperature.layeringOptions.heavy')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              {(() => {
-                const unit = formData.temperature_unit || 'celsius';
-                const isFahrenheit = unit === 'fahrenheit';
-                const coldC = formData.cold_threshold ?? 10;
-                const hotC = formData.hot_threshold ?? 25;
-                return (
-                  <>
-                    <div className="space-y-2">
-                      <Label>{t('temperature.coldThreshold', { unit: isFahrenheit ? '\u00b0F' : '\u00b0C' })}</Label>
-                      <Input
-                        type="number"
-                        value={isFahrenheit ? Math.round(toF(coldC)) : coldC}
-                        onChange={(e) => {
-                          const raw = e.target.value === '' ? (isFahrenheit ? 50 : 10) : parseInt(e.target.value);
-                          updateField('cold_threshold', isFahrenheit ? Math.round(toCelsius(raw)) : raw);
-                        }}
-                        min={isFahrenheit ? -4 : -20}
-                        max={isFahrenheit ? 86 : 30}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>{t('temperature.hotThreshold', { unit: isFahrenheit ? '\u00b0F' : '\u00b0C' })}</Label>
-                      <Input
-                        type="number"
-                        value={isFahrenheit ? Math.round(toF(hotC)) : hotC}
-                        onChange={(e) => {
-                          const raw = e.target.value === '' ? (isFahrenheit ? 77 : 25) : parseInt(e.target.value);
-                          updateField('hot_threshold', isFahrenheit ? Math.round(toCelsius(raw)) : raw);
-                        }}
-                        min={isFahrenheit ? 50 : 10}
-                        max={isFahrenheit ? 113 : 45}
-                      />
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Recommendation Settings */}
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('recommendations.title')}</CardTitle>
-            <CardDescription>
-              {t('recommendations.description')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>{t('recommendations.defaultOccasion')}</Label>
-                <Select
-                  value={formData.default_occasion || 'casual'}
-                  onValueChange={(v) => updateField('default_occasion', v)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {occasions.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>
-                        {o.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>{t('recommendations.varietyLevel')}</Label>
-                <Select
-                  value={formData.variety_level || 'moderate'}
-                  onValueChange={(v) =>
-                    updateField('variety_level', v as 'low' | 'moderate' | 'high')
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="low">{t('recommendations.varietyOptions.low')}</SelectItem>
-                    <SelectItem value="moderate">{t('recommendations.varietyOptions.moderate')}</SelectItem>
-                    <SelectItem value="high">{t('recommendations.varietyOptions.high')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>{t('recommendations.avoidRepeatDays')}</Label>
-                <Input
-                  type="number"
-                  value={formData.avoid_repeat_days ?? 7}
-                  onChange={(e) => updateField('avoid_repeat_days', e.target.value === '' ? 7 : parseInt(e.target.value))}
-                  min={0}
-                  max={30}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>{t('recommendations.preferUnderused')}</Label>
-                <Select
-                  value={formData.prefer_underused_items ? 'yes' : 'no'}
-                  onValueChange={(v) => updateField('prefer_underused_items', v === 'yes')}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="yes">{t('recommendations.yes')}</SelectItem>
-                    <SelectItem value="no">{t('recommendations.no')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* AI Endpoints */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Server className="h-5 w-5" />
-              {t('aiEndpoints.title')}
-            </CardTitle>
-            <CardDescription>
-              {t('aiEndpoints.description')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {(formData.ai_endpoints || []).length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {t('aiEndpoints.noEndpoints')}
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {(formData.ai_endpoints || []).map((endpoint, index) => (
-                  <div
-                    key={index}
-                    className={`border rounded-lg p-4 space-y-3 ${
-                      !endpoint.enabled ? 'opacity-60 bg-muted/50' : ''
-                    }`}
-                  >
-                    <div className="space-y-2">
-                      {/* Header row */}
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <div className="flex flex-col shrink-0">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-5 w-5 p-0"
-                              disabled={index === 0}
-                              onClick={() => {
-                                const updated = [...(formData.ai_endpoints || [])];
-                                [updated[index - 1], updated[index]] = [updated[index], updated[index - 1]];
-                                updateField('ai_endpoints', updated);
-                              }}
-                            >
-                              <ChevronUp className="h-3 w-3" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-5 w-5 p-0"
-                              disabled={index === (formData.ai_endpoints || []).length - 1}
-                              onClick={() => {
-                                const updated = [...(formData.ai_endpoints || [])];
-                                [updated[index], updated[index + 1]] = [updated[index + 1], updated[index]];
-                                updateField('ai_endpoints', updated);
-                              }}
-                            >
-                              <ChevronDown className="h-3 w-3" />
-                            </Button>
-                          </div>
-                          <span className="font-medium text-sm truncate">
-                            {endpoint.name || `Endpoint ${index + 1}`}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <Switch
-                            checked={endpoint.enabled}
-                            onCheckedChange={(checked) => {
-                              const updated = [...(formData.ai_endpoints || [])];
-                              updated[index] = { ...updated[index], enabled: checked };
-                              updateField('ai_endpoints', updated);
-                            }}
-                          />
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-destructive"
-                            onClick={() => {
-                              const updated = (formData.ai_endpoints || []).filter((_, i) => i !== index);
-                              updateField('ai_endpoints', updated);
-                              setEndpointTests((prev) => {
-                                const newTests = { ...prev };
-                                delete newTests[index];
-                                return newTests;
-                              });
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
-                      {/* Status badges and test button */}
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Badge variant={endpoint.enabled ? 'default' : 'secondary'} className="text-xs">
-                          {endpoint.enabled ? t('aiEndpoints.active') : t('aiEndpoints.disabled')}
-                        </Badge>
-                        {endpointTests[index]?.status === 'connected' && (
-                          <Badge variant="outline" className="text-xs text-green-600 border-green-600">
-                            {t('aiEndpoints.connected')}
-                          </Badge>
-                        )}
-                        {endpointTests[index]?.status === 'error' && (
-                          <Badge variant="outline" className="text-xs text-red-600 border-red-600">
-                            {t('aiEndpoints.error')}
-                          </Badge>
-                        )}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 text-xs ml-auto"
-                          onClick={() => handleTestEndpoint(index, endpoint.url)}
-                          disabled={endpointTests[index]?.status === 'testing' || !endpoint.url}
-                        >
-                          {endpointTests[index]?.status === 'testing' ? (
-                            <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                          ) : null}
-                          {t('aiEndpoints.testConnection')}
-                        </Button>
-                      </div>
-                    </div>
-                    {/* Test Results */}
-                    {endpointTests[index]?.status === 'connected' && endpointTests[index]?.models && (
-                      <div className="text-xs space-y-1 p-2 bg-green-50 dark:bg-green-950 rounded overflow-hidden">
-                        <p className="font-medium text-green-700 dark:text-green-300">
-                          {t('aiEndpoints.modelsAvailable', { count: endpointTests[index].models?.length ?? 0 })}
-                        </p>
-                        {endpointTests[index].visionModels && endpointTests[index].visionModels!.length > 0 && (
-                          <p className="text-green-600 dark:text-green-400 truncate" title={endpointTests[index].visionModels?.join(', ')}>
-                            {t('aiEndpoints.visionModels', { models: endpointTests[index].visionModels?.slice(0, 3).join(', ') ?? '' })}
-                            {(endpointTests[index].visionModels?.length || 0) > 3 && '...'}
-                          </p>
-                        )}
-                        {endpointTests[index].textModels && endpointTests[index].textModels!.length > 0 && (
-                          <p className="text-green-600 dark:text-green-400 truncate" title={endpointTests[index].textModels?.join(', ')}>
-                            {t('aiEndpoints.textModels', { models: endpointTests[index].textModels?.slice(0, 3).join(', ') ?? '' })}
-                            {(endpointTests[index].textModels?.length || 0) > 3 && '...'}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                    {endpointTests[index]?.status === 'error' && (
-                      <div className="text-xs p-2 bg-red-50 dark:bg-red-950 rounded text-red-600 dark:text-red-400 break-words">
-                        {endpointTests[index].error}
-                      </div>
-                    )}
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="space-y-1">
-                        <Label className="text-xs">{t('aiEndpoints.fields.name')}</Label>
-                        <Input
-                          value={endpoint.name}
-                          onChange={(e) => {
-                            const updated = [...(formData.ai_endpoints || [])];
-                            updated[index] = { ...updated[index], name: e.target.value };
-                            updateField('ai_endpoints', updated);
-                          }}
-                          placeholder={t('aiEndpoints.placeholders.name')}
-                          className="h-8"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">{t('aiEndpoints.fields.url')}</Label>
-                        <Input
-                          value={endpoint.url}
-                          onChange={(e) => {
-                            const updated = [...(formData.ai_endpoints || [])];
-                            updated[index] = { ...updated[index], url: e.target.value };
-                            updateField('ai_endpoints', updated);
-                          }}
-                          placeholder="http://localhost:11434/v1"
-                          className="h-8"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">{t('aiEndpoints.fields.visionModel')}</Label>
-                        <Input
-                          value={endpoint.vision_model}
-                          onChange={(e) => {
-                            const updated = [...(formData.ai_endpoints || [])];
-                            updated[index] = { ...updated[index], vision_model: e.target.value };
-                            updateField('ai_endpoints', updated);
-                          }}
-                          placeholder="moondream"
-                          className="h-8"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">{t('aiEndpoints.fields.textModel')}</Label>
-                        <Input
-                          value={endpoint.text_model}
-                          onChange={(e) => {
-                            const updated = [...(formData.ai_endpoints || [])];
-                            updated[index] = { ...updated[index], text_model: e.target.value };
-                            updateField('ai_endpoints', updated);
-                          }}
-                          placeholder="phi3:mini"
-                          className="h-8"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={() => {
-                  const newEndpoint: AIEndpoint = {
-                    name: `Endpoint ${(formData.ai_endpoints || []).length + 1}`,
-                    url: 'http://localhost:11434/v1',
-                    vision_model: 'moondream',
-                    text_model: 'phi3:mini',
-                    enabled: true,
-                  };
-                  updateField('ai_endpoints', [...(formData.ai_endpoints || []), newEndpoint]);
-                }}
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                {t('aiEndpoints.addEndpoint')}
-              </Button>
-              {hasChanges && (
-                <Button onClick={handleSave} disabled={updatePreferences.isPending}>
-                  {updatePreferences.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                  ) : (
-                    <Save className="h-4 w-4 mr-2" />
-                  )}
-                  {tc('save')}
-                </Button>
+      {/* --------------------------------------------------------- storage --- */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Store className="h-4 w-4" />
+            {t('storage.title', { defaultValue: 'Data & limits' })}
+          </CardTitle>
+          <CardDescription>
+            {t('storage.description', {
+              defaultValue:
+                'Where this build keeps your photos and rows - and what that means for a free-tier trial.',
+            })}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground flex items-center gap-2">
+              <Server className="h-4 w-4" />
+              {t('storage.backend', { defaultValue: 'Image storage' })}
+            </span>
+            <span>
+              {caps?.storage.s3 ? (
+                <Badge variant="outline">S3</Badge>
+              ) : (
+                <Badge variant="outline">
+                  {t('storage.local', { defaultValue: 'Local disk (ephemeral)' })}
+                </Badge>
               )}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {caps?.storage.persistent
+              ? t('storage.persistentNote', {
+                  defaultValue: 'Objects live in an S3-compatible bucket, so they survive redeploys.',
+                })
+              : t('storage.ephemeralNote', {
+                  defaultValue:
+                    'Render\'s free tier has no persistent disk: photos are re-downloaded by the AI but deleted when the service restarts. Set STORAGE_S3_BUCKET (and its key/secret) if you need uploads to last.',
+                })}
+          </p>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">{t('storage.auth', { defaultValue: 'Sign-in' })}</span>
+            <span>
+              {authStatus?.auth_required
+                ? t('storage.authOn', { defaultValue: 'Password required' })
+                : t('storage.authOff', { defaultValue: 'None - single demo user' })}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">{t('storage.version', { defaultValue: 'Build' })}</span>
+            <code className="text-xs">{caps?.version ?? '…'}</code>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

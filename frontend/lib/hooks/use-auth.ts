@@ -1,66 +1,61 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+/**
+ * Auth for the trial build.
+ *
+ * Upstream this hook drove a NextAuth session: it read `session.accessToken`,
+ * pushed it into the API client and bounced visitors to /login on a 401. The
+ * trial runs with `REQUIRE_AUTH=false`, where the backend answers every
+ * request as one implicit demo user, so there is nothing to sign in to - but
+ * the header still wants a display name, and the dashboard still wants to
+ * know whether the row in the database is a brand-new visitor.
+ *
+ * If you re-enable `REQUIRE_AUTH=true`, call `POST /api/v1/auth/sync` with a
+ * password (or the shared secret of your choosing), hand the returned token to
+ * `setAccessToken()` from `lib/api.ts`, and put a login page back in front of
+ * this.
+ */
+
 import { useQuery } from '@tanstack/react-query';
-import { useSession, signOut } from 'next-auth/react';
-import { api, setAccessToken, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
 import type { UserProfile } from './use-user';
 
+export interface AuthStatus {
+  auth_required: boolean;
+  mode: string;
+  oidc_enabled: boolean;
+  demo_password_enabled: boolean;
+  ai_configured: boolean;
+  storage: string;
+}
+
+export function useAuthStatus() {
+  return useQuery({
+    queryKey: ['auth-status'],
+    queryFn: () => api.get<AuthStatus>('/auth/status'),
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+}
+
 export function useAuth() {
-  const { data: session, status } = useSession();
-  const signingOut = useRef(false);
-
-  // Set access token if available from NextAuth
-  if (session?.accessToken) {
-    setAccessToken(session.accessToken as string);
-  }
-
-  const hasToken = !!session?.accessToken;
-  const syncError = session?.syncError;
-
   const userQuery = useQuery({
     queryKey: ['auth-user'],
     queryFn: () => api.get<UserProfile>('/users/me'),
-    // Only fetch when session is loaded AND we have an access token
-    enabled: status === 'authenticated' && hasToken,
+    staleTime: 5 * 60 * 1000,
     retry: false,
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    refetchOnWindowFocus: false,
   });
-
-  useEffect(() => {
-    if (signingOut.current) return;
-
-    if (userQuery.error instanceof ApiError && userQuery.error.status === 401) {
-      signingOut.current = true;
-      signOut({ redirect: false }).then(() => {
-        signingOut.current = false;
-      });
-      return;
-    }
-
-    if (status === 'authenticated' && !hasToken) {
-      signingOut.current = true;
-      const callbackUrl = syncError
-        ? `/login?syncError=${encodeURIComponent(syncError)}`
-        : '/login';
-      signOut({ callbackUrl }).then(() => {
-        signingOut.current = false;
-      });
-    }
-  }, [userQuery.error, status, hasToken, syncError]);
-
-  const isAuthenticated = userQuery.isSuccess && !!userQuery.data;
- 
-  const isLoading = status === 'loading' || (status === 'authenticated' && userQuery.isPending);
+  const status = useAuthStatus();
 
   return {
     user: userQuery.data,
-    isAuthenticated,
-    isLoading,
-    error: userQuery.error,
-    // For components that still need session info
-    session,
-    sessionStatus: status,
+    // Nothing gates the trial, so "authenticated" is whatever the API says.
+    isAuthenticated: !userQuery.isError,
+    isLoading: userQuery.isPending || status.isPending,
+    error: userQuery.error ?? status.error,
+    authStatus: status.data,
+    signOut: async () => {
+      /* no session to clear */
+    },
   };
 }

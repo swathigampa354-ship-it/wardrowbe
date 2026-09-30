@@ -1,617 +1,130 @@
-<p align="center">
-  <img src="./frontend/public/logo.svg" alt="wardrowbe" width="120" height="120">
-</p>
+# Wardrowbe — free-tier trial
 
-<h1 align="center">wardrowbe</h1>
+A single-container build of [wardrowbe](https://github.com/Anyesh/wardrowbe) that does the one
+thing worth demonstrating and nothing else:
 
-<p align="center">
-  Put your wardrobe in rows. Snap. Organize. Wear.
-</p>
-<p align="center">
-  <a href="https://claude.ai/code"><img src="https://img.shields.io/badge/Built%20with%20Claude%20Code-D97757?style=for-the-badge&logo=claude&logoColor=white" alt="Built with Claude Code"></a>
-  <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=nextdotjs&logoColor=white" alt="Next.js"></a>
-  <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI"></a>
-  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript"></a>
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
-</p>
+**upload clothing photos → an AI tags each one → the app assembles ~3 outfits → you accept or
+reject them in a web UI.**
 
-<p align="center">
-  <a href="#features">Features</a> •
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#languages">Languages</a> •
-  <a href="#deployment">Deployment</a> •
-  <a href="#architecture">Architecture</a> •
-  <a href="#contributing">Contributing</a>
-</p>
+Everything that made the original expensive to run — Redis, arq workers, a scheduled-notification
+loop, family sharing, an image-processing GPU-ish worker, OIDC, Nginx, Kubernetes — is gone. One
+container, one `docker build`, one free Render service.
 
-<p align="center">
-  <a href="https://buymeacoffee.com/anyesh">
-    <img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy Me A Coffee">
-  </a>
-</p>
+```
+docker build -t wardrowbe-trial .
+docker run --rm -p 10000:10000 \
+  -e AI_API_KEY=<your key> \
+  wardrowbe-trial
+# → http://localhost:10000
+```
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Google%20Play-Coming%20Soon-34A853?style=for-the-badge&logo=googleplay&logoColor=white" alt="Google Play - Coming Soon">
-  &nbsp;
-  <a href="https://apps.apple.com/us/app/wardrowbe/id6759947671">
-    <img src="https://img.shields.io/badge/App%20Store-0D96F6?style=for-the-badge&logo=appstore&logoColor=white" alt="App Store">
-  </a>
-</p>
+No `AI_API_KEY`? The container still runs: uploads are stored, the wardrobe works, and outfit
+generation returns a readable 503 telling you which variable to set.
 
-Self-hosted wardrobe management with AI-powered outfit recommendations. Take photos of your clothes, let AI tag them, and get daily outfit suggestions based on weather and occasion.
+---
 
-## Features
+## What is in here
 
-- **Photo-based wardrobe** - Upload photos, AI extracts clothing details automatically
-- **Smart recommendations** - Outfits matched to weather, occasion, and your preferences
-- **Scheduled notifications** - Daily outfit suggestions via ntfy/Mattermost/email
-- **Family support** - Manage wardrobes for household members
-- **Wear tracking** - History, ratings, and outfit feedback
-- **Analytics** - See what you wear, what you don't, color distribution
-- **Fully self-hosted** - Your data stays on your hardware
-- **Works with any AI** - OpenAI, Ollama, LocalAI, or any OpenAI-compatible API
-- **8 languages** - English, Chinese (Simplified & Traditional), Korean, Japanese, French, German, Italian
+| Path | What it is |
+|---|---|
+| `backend/` | FastAPI. `app/api/{items,outfits,misc}.py` hold every route; `app/ai_service.py` is the OpenAI-compatible client. |
+| `frontend/` | Next.js 14 (standalone output). The original UI, minus every screen that talked to a removed service. |
+| `Dockerfile` | The whole app in one image. |
+| `.env.example` | Every variable the trial reads, with what breaks if you omit it. |
+| `docs/architecture.md` | Request-flow diagram + why each removal was safe. |
+| `docs/free-tier-limits.md` | What genuinely does not work on a free tier, and the honest workaround. |
+| `docs/strip-plan.md` | Removed vs retained, component by component. |
 
-## Languages
+## Running it
 
-Wardrowbe's UI is fully translated into 8 languages via `next-intl`. Pick a language from Settings, or let it follow your browser automatically.
-
-| Language | Locale code |
-|----------|-------------|
-| English | `en` |
-| 中文简体 (Chinese, Simplified) | `zh-CN` |
-| 中文繁體 (Chinese, Traditional) | `zh-TW` |
-| 한국어 (Korean) | `ko` |
-| 日本語 (Japanese) | `ja` |
-| Français (French) | `fr` |
-| Deutsch (German) | `de` |
-| Italiano (Italian) | `it` |
-
-Want to add a language or improve a translation? See [Internationalization](CONTRIBUTING.md#internationalization) in the contributing guide.
-
-## Screenshots
-
-### Wardrobe & Item Details
-| Grid View | Item Details & AI Analysis |
-|-----------|---------------------------|
-| ![Wardrobe](screenshots/last.png) | ![Item Details](screenshots/wardrobe.png) |
-
-### Wash Tracking & Outfit Suggestions
-| Wash Tracking | Suggestions |
-|---------------|-------------|
-| ![Wash Tracking](screenshots/needs-washing.png) | ![Suggest](screenshots/suggest.png) |
-
-### History & Analytics
-| History Calendar | Analytics |
-|------------------|-----------|
-| ![History](screenshots/history.png) | ![Analytics](screenshots/analytics.png) |
-
-### Pairings
-| Pairing View | Pairing Modal |
-|--------------|---------------|
-| ![Pairing](screenshots/pairings.png) | ![Pairing Modal](screenshots/pairings-modal.png) |
-
-## Quick Start
-
-### Prerequisites
-
-- Docker and Docker Compose installed
-- At least 4GB of RAM available
-- An AI service (Ollama recommended for free local AI, or OpenAI API key)
-
-### Setup
-
-#### Step 1: Install Ollama (if using local AI)
-
-**Option A: Using Ollama (Recommended - Free, runs locally)**
+### Docker (closest to the deployed shape)
 
 ```bash
-# Install Ollama from https://ollama.ai
-# Then pull required models:
-ollama pull gemma3        # Multimodel LLM (for image analysis and outfit recommendations)
-
-# Verify it's running:
-curl http://localhost:11434/api/tags
+cp .env.example .env          # fill in AI_API_KEY
+docker build -t wardrowbe-trial .
+docker run --rm -p 10000:10000 --env-file .env wardrowbe-trial
 ```
 
-**Option B: Using OpenAI (Paid API)**
+`STORAGE_DIR` defaults to `/data/wardrobe`, which is container-local and **ephemeral** — exactly
+like Render Free. Mount a volume (`-v $PWD/storage:/data/wardrobe`) if you want the demo to
+survive a restart of the container.
 
-Get your API key from https://platform.openai.com/api-keys
-
-#### Step 2: Clone and Configure
+### Without Docker
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/wardrowbe.git
-cd wardrowbe
+# API
+cd backend && python3 -m pip install -r requirements.txt
+STORAGE_DIR=$PWD/../storage AI_API_KEY=*** \
+  AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai \
+  AI_VISION_MODEL=gemini-2.5-flash AI_TEXT_MODEL=gemini-2.5-flash \
+  python3 -m uvicorn app.main:app --port 8000
 
-# Copy environment template
-cp .env.example .env
-
-# IMPORTANT: Edit .env and configure AI settings
-# For Ollama (default in .env.example):
-#   AI_BASE_URL=http://host.docker.internal:11434/v1
-#   AI_VISION_MODEL=gemma3:latest
-#   AI_TEXT_MODEL=gemma3:latest
-#
-# For OpenAI, uncomment and set:
-#   AI_BASE_URL=https://api.openai.com/v1
-#   AI_API_KEY=sk-your-api-key-here
-#   AI_VISION_MODEL=gpt-4o
-#   AI_TEXT_MODEL=gpt-4o
-
-# Optional: Generate secure secrets for production
-# SECRET_KEY=$(openssl rand -hex 32)
-# NEXTAUTH_SECRET=$(openssl rand -hex 32)
+# UI (separate shell) — it proxies /api/v1 to $BACKEND_URL at request time
+cd frontend && npm ci && BACKEND_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-#### Step 3: Start Services
-
-`docker-compose.yml` pulls pre-built multi-arch images (`linux/amd64` and `linux/arm64`, so Raspberry Pi and other ARM hosts work) from GitHub Container Registry. No local build tooling is required on the host.
+### Verifying
 
 ```bash
-# Pull the latest published images, then start all containers
-docker compose pull
-docker compose up -d
-
-# Wait for services to be healthy (30 seconds)
-docker compose ps
-
-# Run database migrations (REQUIRED)
-docker compose exec backend alembic upgrade head
-
-# Verify everything is working
-curl http://localhost:8000/api/v1/health
-# Should return: {"status":"healthy"}
+cd backend
+python3 -m pytest        # 18 tests: AI failure modes, image validation, CORS, SQLite concurrency
+python3 -m tests.e2e     # 59 checks: upload → tag → edit → re-analyze → 3 outfits → accept → cleanup
+cd ../frontend
+npx tsc --noEmit         # type-clean against the stripped API
+npx next build           # production build (type + lint errors fail the build)
 ```
 
-To build the images from source instead of pulling them, use the development stack below (`docker-compose.dev.yml`), which builds locally and enables hot reload.
+`tests/e2e` and `tests/test_ai_failures.py` run against a stdlib stub provider
+(`backend/tests/fake_provider.py`) — no network, no API key, no quota. That stub is also what
+makes the failure-path tests real: bad key, rate limit, truncated JSON, non-JSON, timeouts,
+out-of-vocabulary clothing types.
 
-#### Step 4: Access the App
+## The demo flow, in order
 
-- **Frontend:** http://localhost:3000
-- **API Docs:** http://localhost:8000/docs
-- **Login:** Click "Login" - uses dev credentials by default (no password needed)
+1. Open `/dashboard` — a starter card tells you the wardrobe is empty.
+2. `/dashboard/wardrobe` → **Add item** (one photo) or **Bulk upload** (drag a folder).
+3. Each upload returns as soon as the photo is stored; the AI tags arrive a few seconds later and
+   the card flips from "Analyzing…" to the detected type/colours. A failed analysis shows the
+   provider's actual error and a **Re-analyze** button, never a lost photo.
+4. `/dashboard/suggest` → pick an occasion → three complete outfits, each with a headline,
+   highlights and a styling tip.
+5. Accept (goes to `/dashboard/outfits`), reject, or "try another".
+6. `/dashboard/outfits` → open one → accept/reject/delete, see the items.
+7. `/dashboard/settings` → location (weather), default occasion, temperature unit, plus a live
+   read-out of the AI provider, storage mode and limits.
 
-### Development Mode
+## AI configuration
 
-For hot reloading during development (auto-rebuilds on code changes):
-
-```bash
-# Start in dev mode
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
-
-# Run migrations (first time only)
-docker compose exec backend alembic upgrade head
-
-# View logs
-docker compose logs -f frontend backend
-```
-
-## AI Configuration
-
-Wardrowbe works with any OpenAI-compatible API. You need two types of models:
-- **Vision model**: Analyzes clothing images to extract colors, patterns, styles
-- **Text model**: Generates outfit recommendations and descriptions
-
-### Running without internal AI
-
-Internal AI is optional. Set `AI_INTERNAL_ENABLED=false` to run the backend with
-no internal AI provider at all — it boots and serves without `AI_BASE_URL`,
-`AI_API_KEY`, or model names configured, and defers tagging/suggestions/pairings
-to an external agent. You can also disable a single capability with
-`AI_VISION_ENABLED=false` (auto-tagging) or `AI_TEXT_ENABLED=false`
-(suggestions/pairings); unset switches inherit the master. The effective state is
-reported at `GET /api/v1/capabilities`. Defaults keep internal AI **on**, so
-existing deployments are unaffected.
-
-### Using Ollama (Recommended for Self-Hosting)
-
-**Free, runs locally, no API key needed, works offline**
-
-1. Install [Ollama](https://ollama.ai)
-2. Pull models:
-   ```bash
-   ollama pull gemma3:latest  # multimodel LLM (3.4GB) - analyze images and generates recommendations
-
-   # Alternative text models you can use:
-   # ollama pull llama3:latest     # Good all-around model
-   # ollama pull qwen2.5:latest    # Fast and efficient
-   # ollama pull mistral:latest    # Great for creative text
-   ```
-
-3. Configure in `.env`:
-   ```env
-   AI_BASE_URL=http://host.docker.internal:11434/v1
-   AI_API_KEY=not-needed
-   AI_VISION_MODEL=gemma3:latest
-   AI_TEXT_MODEL=gemma3:latest
-   ```
-
-**Note:** Use `host.docker.internal` instead of `localhost` so Docker containers can reach your host's Ollama.
-
-### Using OpenAI
-
-**Paid API, requires internet connection**
-
-1. Get API key from https://platform.openai.com/api-keys
-2. Configure in `.env`:
-   ```env
-   AI_BASE_URL=https://api.openai.com/v1
-   AI_API_KEY=sk-your-api-key-here
-   AI_VISION_MODEL=gpt-4o
-   AI_TEXT_MODEL=gpt-4o
-   ```
-
-### Using LocalAI
-
-**Self-hosted OpenAI alternative**
-
-```env
-AI_BASE_URL=http://localai:8080/v1
-AI_API_KEY=not-needed
-AI_VISION_MODEL=gpt-4-vision-preview
-AI_TEXT_MODEL=gpt-3.5-turbo
-```
-
-### Using Multimodal Models
-
-Some models can handle both vision and text (like qwen2-vl, llama3.2-vision):
-
-```env
-AI_VISION_MODEL=llama3.2-vision:11b
-AI_TEXT_MODEL=llama3.2-vision:11b  # Same model for both tasks
-```
-
-## Architecture
+Any OpenAI-compatible `/chat/completions` endpoint works. Default is Google's Gemini free tier — the
+mainstream free tier that still takes image input (rate-limited to a few hundred calls a day: fine
+for one person clicking around, not for traffic):
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Frontend                              │
-│                   (Next.js + React Query)                    │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-┌─────────────────────────▼───────────────────────────────────┐
-│                        Backend                               │
-│                   (FastAPI + SQLAlchemy)                     │
-└──────────┬──────────────┬──────────────────┬────────────────┘
-           │              │                  │
-    ┌──────▼──────┐ ┌─────▼─────┐    ┌──────▼──────┐
-    │  PostgreSQL │ │   Redis   │    │  AI Service │
-    │  (Database) │ │ (Job Queue)│   │ (OpenAI/etc)│
-    └─────────────┘ └─────┬─────┘    └─────────────┘
-                          │
-               ┌──────────▼──────────┐
-               │   Background Worker │
-               │    (arq - AI Jobs)  │
-               └─────────────────────┘
+AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+AI_API_KEY=***
+AI_VISION_MODEL=gemini-2.5-flash
+AI_TEXT_MODEL=gemini-2.5-flash
 ```
 
-### Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Frontend | Next.js 14, TypeScript, TanStack Query, Tailwind CSS, shadcn/ui |
-| Backend | FastAPI, SQLAlchemy (async), Pydantic, Python 3.11+ |
-| Database | PostgreSQL 15 |
-| Cache/Queue | Redis 7 |
-| Background Jobs | arq |
-| Authentication | NextAuth.js (supports OIDC, dev credentials) |
-| AI | Any OpenAI-compatible API |
-
-## Deployment
-
-### Docker Compose (Production)
-
-See [docker-compose.prod.yml](docker-compose.prod.yml) for production configuration. Like the default stack, it pulls pre-built images from GHCR rather than building on the host.
-
-```bash
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
-docker compose exec backend alembic upgrade head
-```
-
-Images are tagged `backend-latest` / `frontend-latest`, and each release also
-publishes `backend-<version>` / `frontend-<version>` (e.g. `backend-1.3.0`). To
-pin a deployment to a specific release, replace the `-latest` tags in the
-compose file with the version, e.g. `ghcr.io/anyesh/wardrowbe:backend-1.3.0`.
-
-### Kubernetes
-
-See the [k8s/](k8s/) directory for Kubernetes manifests including:
-- PostgreSQL and Redis with persistent storage
-- Backend API and worker deployments
-- Next.js frontend
-- Ingress with TLS
-- Network policies
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `DATABASE_URL` | PostgreSQL connection string | Yes |
-| `SECRET_KEY` | Backend secret for JWT | Yes |
-| `PUID` | Uid the app process runs as (default: 1000 backend/worker, 1001 frontend) | No |
-| `PGID` | Gid the app process runs as (default: 1000 backend/worker, 1001 frontend) | No |
-| `NEXTAUTH_SECRET` | NextAuth session encryption | Yes |
-| `AI_BASE_URL` | AI service URL | Yes |
-| `AI_API_KEY` | AI API key (if required) | Depends |
-| `OIDC_ISSUER_URL` | OIDC provider URL (enables SSO login) | No |
-| `OIDC_CLIENT_ID` | OIDC client ID | If OIDC |
-| `OIDC_CLIENT_SECRET` | OIDC client secret | If OIDC |
-| `OIDC_SKIP_SSL_VERIFY` | Skip TLS verification for OIDC provider (self-signed certs) | No |
-| `LOCAL_DNS` | Custom DNS server for container name resolution (e.g. local OIDC host) | No |
-| `SMTP_HOST` | SMTP server for email notifications | No |
-| `SMTP_PORT` | SMTP port (default: 587) | No |
-| `SMTP_USER` | SMTP username | No |
-| `SMTP_PASSWORD` | SMTP password | No |
-| `BG_REMOVAL_PROVIDER` | Background removal backend: `rembg` or `http` (default: `rembg`) | No |
-| `BG_REMOVAL_MODEL` | rembg model name (default: `u2net`) | No |
-| `BG_REMOVAL_URL` | URL for HTTP bg removal provider | If http |
-| `BG_REMOVAL_API_KEY` | API key for HTTP bg removal provider | No |
-| `NEXT_PUBLIC_ENABLE_IP_LOCATION_FALLBACK` | Enable IP-based approximate location when browser geolocation is denied/unavailable. Off by default (sends the user's IP to a third party). Set to `true` to enable | No |
-| `NEXT_PUBLIC_NETWORK_LOCATION_URL` | Override the IP geolocation provider (default: `https://ipapi.co/json/`). Only used when the fallback above is enabled | No |
-
-See [.env.example](.env.example) for all options.
-
-### Location Detection (Privacy Note)
-
-The Settings page can fill in your coordinates from the browser's Geolocation API. If that is denied or unavailable, an optional fallback can approximate your location from your IP address via a third-party service (`ipapi.co` by default). This fallback is **disabled by default** because it sends the user's IP to an external provider; enable it with `NEXT_PUBLIC_ENABLE_IP_LOCATION_FALLBACK=true` and optionally point `NEXT_PUBLIC_NETWORK_LOCATION_URL` at a provider you trust. These are build-time frontend variables, so set them before building the frontend image. Geocoding a location name you type yourself still uses OpenStreetMap Nominatim regardless of this setting.
-
-### Background Removal (Optional)
-
-Remove image backgrounds from wardrobe items. Two backends supported:
-
-**rembg (local, default):**
-```bash
-pip install rembg[cpu]  # add to your image, or install manually
-```
-No config needed — works out of the box. Change model with `BG_REMOVAL_MODEL` (default: `u2net`, options: `isnet-general-use`, `silueta`, `u2netp`).
-
-**HTTP provider (e.g. [withoutbg](https://github.com/nicholasgasior/withoutbg)):**
-```env
-BG_REMOVAL_PROVIDER=http
-BG_REMOVAL_URL=http://withoutbg:5000
-BG_REMOVAL_API_KEY=          # optional
-```
-
-If neither is configured, the remove-background button returns a 501 with setup instructions.
-
-### Authentication
-
-- **Development Mode** (default): Simple email/name login, no setup required
-- **OIDC Mode**: Any OIDC provider (PocketID, Authentik, Keycloak, Auth0, etc.)
-
-To enable OIDC, set `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` in your `.env`. If your OIDC provider uses a self-signed certificate, set `OIDC_SKIP_SSL_VERIFY=true`. If your OIDC provider runs on a hostname that Docker containers can't resolve (e.g. a local DNS name), set `LOCAL_DNS` to your DNS server IP, or set `OIDC_HOST` and `OIDC_HOST_IP` to inject the hostname directly into the container's `/etc/hosts`.
-
-When registering the app in your OIDC provider, use this as the callback/redirect URI:
-
-```
-{NEXTAUTH_URL}/api/auth/callback/oidc
-```
-
-For example, if `NEXTAUTH_URL=http://localhost:8080`, the callback URL is:
-
-```
-http://localhost:8080/api/auth/callback/oidc
-```
-
-### Notifications
-
-- **ntfy.sh**: Free push notifications
-- **Email**: SMTP-based (set `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD` in `.env`)
-
-### Weather
-
-Uses [Open-Meteo](https://open-meteo.com/) - free, no API key needed.
-
-## Development
-
-### Backend
-
-```bash
-# Run tests (requires running containers)
-docker compose exec backend python -m pytest tests/ -v --tb=short
-
-# Run a specific test file
-docker compose exec backend python -m pytest tests/test_notification_workers.py -v
-
-# Lint
-pip install ruff
-ruff check --fix backend/app/ && ruff format backend/app/
-```
-
-### Frontend
-
-```bash
-cd frontend
-npm install
-
-# Run dev server
-npm run dev
-
-# Run tests
-npm test
-
-# Build
-npm run build
-```
-
-### API Documentation
-
-Available when running:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-
-## Troubleshooting
-
-### Build Fails with TypeScript Errors
-
-```bash
-# Check for type errors
-cd frontend
-npm install
-npx tsc --noEmit
-
-# If you see errors, please report them as a bug
-```
-
-### Frontend Shows "500 Internal Server Error" or Won't Load
-
-```bash
-# 1. Check all services are healthy
-docker compose ps
-
-# 2. Check backend is responding
-curl http://localhost:8000/api/v1/health
-
-# 3. Verify migrations ran successfully
-docker compose exec backend alembic current
-
-# 4. Check logs for errors
-docker compose logs backend frontend --tail=50
-
-# 5. If migrations failed, run them manually
-docker compose exec backend alembic upgrade head
-```
-
-### AI Features Not Working / Images Not Being Analyzed
-
-```bash
-# For Ollama users:
-# 1. Verify Ollama is running and accessible
-curl http://localhost:11434/api/tags
-# Should show your installed models
-
-# 2. Check you have the vision model
-ollama list | grep gemma
-
-# 3. Verify .env has correct configuration
-cat .env | grep AI_
-
-# 4. Check worker logs for AI errors
-docker compose logs worker --tail=50
-
-# For OpenAI users:
-# 1. Verify API key is valid
-curl https://api.openai.com/v1/models \
-  -H "Authorization: Bearer $AI_API_KEY"
-
-# 2. Check you have credits remaining in your account
-```
-
-### Development Mode Fails to Start
-
-```bash
-# 1. Ensure you're using the dev compose file
-docker compose -f docker-compose.yml -f docker-compose.dev.yml down
-docker compose -f docker-compose.yml -f docker-compose.dev.yml build frontend
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
-
-# 2. Check frontend logs
-docker compose logs frontend -f
-
-# Alternative: Run frontend locally for development
-cd frontend
-npm install
-npm run dev
-# Then access at http://localhost:3000
-```
-
-### Port Already in Use
-
-```bash
-# Check what's using the ports
-sudo lsof -i :3000  # Frontend
-sudo lsof -i :8000  # Backend
-sudo lsof -i :5432  # PostgreSQL
-sudo lsof -i :6379  # Redis
-
-# Stop conflicting services or change ports in .env
-```
-
-### Database Migration Errors
-
-```bash
-# Check current migration version
-docker compose exec backend alembic current
-
-# View migration history
-docker compose exec backend alembic history
-
-# If migrations are corrupted, reset (WARNING: Deletes all data!)
-docker compose down -v
-docker compose up -d
-sleep 10
-docker compose exec backend alembic upgrade head
-```
-
-### Container Keeps Restarting
-
-```bash
-# Check container logs
-docker compose logs <service-name> --tail=100
-
-# Common issues:
-# - Database not ready: Wait 30 seconds and retry
-# - Out of memory: Increase Docker memory limit
-# - Permission errors: Check file permissions on volumes
-```
-
-### Performance Issues / Slow Response
-
-```bash
-# Check resource usage
-docker stats
-
-# If backend is slow:
-# 1. Check PostgreSQL performance
-docker compose exec postgres psql -U wardrobe -c "SELECT * FROM pg_stat_activity;"
-
-# 2. Check Redis connection
-docker compose exec redis redis-cli ping
-
-# If AI analysis is slow:
-# - For Ollama: Use smaller quantized models
-# - For OpenAI: Check your rate limits
-```
-
-### Getting Help
-
-If you're still stuck:
-1. Check existing [GitHub Issues](https://github.com/yourusername/wardrowbe/issues)
-2. Search [Discussions](https://github.com/yourusername/wardrowbe/discussions)
-3. Create a new issue with:
-   - Output of `docker compose ps`
-   - Relevant logs from `docker compose logs`
-   - Your .env configuration (redact secrets!)
-   - Steps to reproduce the problem
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## Support
-
-If you find wardrowbe useful, consider supporting its development:
-
-<a href="https://buymeacoffee.com/anyesh"><img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy Me A Coffee"></a>
-
-Thanks to our supporters:
-
-- [@aaratisharma-star](https://github.com/aaratisharma-star)
-- [@zkhcohen](https://github.com/zkhcohen)
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Requirements
-
-- Docker & Docker Compose
-- ~4GB RAM (with local Ollama models)
-- Storage for clothing photos
-
-Works great on a Raspberry Pi 5!
+OpenAI, OpenRouter, Groq (text only — no image input), a local Ollama/vLLM server: change those
+three values and nothing else. Comma-separate `AI_VISION_MODEL` to rotate across models when one
+hits its rate limit. Keys are read only by the API process — nothing AI-related is ever bundled
+into the frontend.
+
+## Deploying to Render (free)
+
+Full click-through in [`docs/render-deploy.md`](docs/render-deploy.md). Summary: **New →
+Blueprint** (or *Web Service*), repo = this project's `trial-free-tier` branch, Docker runtime,
+instance type **Free**, path to Dockerfile `/Dockerfile`, health check path `/`, and the env vars
+from `.env.example`. Optionally attach a free Postgres instance (1 GB, **expires 30 days
+after creation**) so rows survive a restart; photos still do not unless you point `STORAGE_S3_*` at a real
+bucket.
+
+## Deliberate limits (read this before judging a demo)
+
+- **Render Free has no persistent disk.** Photos on local disk are deleted on redeploy, restart
+  or spin-down. The app says so on startup, in `/health/storage`, and on the settings page.
+- **Render's free Postgres expires 30 days after creation** (deleted 14 days later) — dump it
+  before then, or run the demo with `STORAGE_DIR` on a mounted volume locally instead.
+- **Spin-down**: the first request after idle pays ~50 s of cold start.
+- No multi-user, no sharing, no background queue, no email/ntfy notifications, no analytics.

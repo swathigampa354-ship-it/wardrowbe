@@ -1,15 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { useSession } from 'next-auth/react';
-import { api, setAccessToken } from '@/lib/api';
-
-function useSetTokenIfAvailable() {
-  const { data: session } = useSession();
-  if (session?.accessToken) {
-    setAccessToken(session.accessToken as string);
-  }
-}
+import { api } from '@/lib/api';
 
 export interface Weather {
   temperature: number;
@@ -26,13 +18,10 @@ export interface Weather {
 }
 
 export function useWeather() {
-  const { status } = useSession();
-  useSetTokenIfAvailable();
 
   return useQuery({
     queryKey: ['weather'],
     queryFn: () => api.get<Weather>('/weather/current'),
-    enabled: status !== 'loading',
     staleTime: 1000 * 60 * 15, // 15 minutes - weather doesn't change that fast
     retry: false, // Don't retry if location not set
   });

@@ -74,40 +74,23 @@ function outfitsByDate(outfits: Outfit[]): Map<string, Outfit[]> {
   return map;
 }
 
-type FilterChip =
-  | 'all'
-  | 'my-looks'
-  | 'worn'
-  | 'pairings'
-  | 'replacements'
-  | 'ai';
+// The trial has no lookbook, no pairing-triggered outfits and no
+// replacement-outfit chain, so only these three chips survive.
+type FilterChip = 'all' | 'worn' | 'ai';
 
 type ViewMode = 'list' | 'calendar';
 
-const CHIP_ORDER: FilterChip[] = [
-  'all',
-  'my-looks',
-  'worn',
-  'pairings',
-  'replacements',
-  'ai',
-];
+const CHIP_ORDER: FilterChip[] = ['all', 'worn', 'ai'];
 
 const CHIP_KEYS: Record<FilterChip, string> = {
   all: 'filters.all',
-  'my-looks': 'filters.lookbook',
   worn: 'filters.worn',
-  pairings: 'filters.pairings',
-  replacements: 'filters.replacements',
   ai: 'filters.ai',
 };
 
 const EMPTY_KEYS: Record<FilterChip, string> = {
   all: 'empty.all',
-  'my-looks': 'empty.myLooks',
   worn: 'empty.worn',
-  pairings: 'empty.pairings',
-  replacements: 'empty.replacements',
   ai: 'empty.ai',
 };
 
@@ -115,18 +98,8 @@ function chipToFilters(chip: FilterChip, search: string): OutfitFilters {
   const filters: OutfitFilters = {};
   if (search) filters.search = search;
   switch (chip) {
-    case 'my-looks':
-      filters.is_lookbook = true;
-      return filters;
     case 'worn':
-      filters.is_lookbook = false;
       filters.status = 'accepted';
-      return filters;
-    case 'pairings':
-      filters.has_source_item = true;
-      return filters;
-    case 'replacements':
-      filters.is_replacement = true;
       return filters;
     case 'ai':
       filters.source = 'scheduled,on_demand';
@@ -144,8 +117,7 @@ function OutfitsPageContent() {
   const searchParams = useSearchParams();
   const rawFilter = (searchParams.get('filter') as FilterChip) || 'all';
   const urlView: ViewMode = searchParams.get('view') === 'calendar' ? 'calendar' : 'list';
-  const urlFilter: FilterChip =
-    urlView === 'calendar' && rawFilter === 'my-looks' ? 'all' : rawFilter;
+  const urlFilter: FilterChip = (CHIP_ORDER as string[]).includes(rawFilter) ? rawFilter : 'all';
   const chip: FilterChip = urlFilter;
   const view: ViewMode = urlView;
   const urlMonth = parseMonthParam(searchParams.get('month'));
@@ -153,7 +125,6 @@ function OutfitsPageContent() {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [defaultChecked, setDefaultChecked] = useState(false);
   const [monthRef, setMonthRef] = useState<MonthRef>(urlMonth ?? currentMonthRef());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectMode, setSelectMode] = useState(false);
@@ -198,24 +169,6 @@ function OutfitsPageContent() {
     monthRef.month,
     view === 'calendar' ? filters : {},
   );
-
-  const lookbookProbe = useOutfits({ is_lookbook: true }, 1, 1);
-
-  useEffect(() => {
-    if (defaultChecked) return;
-    if (urlFilter !== 'all' || urlView === 'calendar') {
-      setDefaultChecked(true);
-      return;
-    }
-    if (lookbookProbe.data) {
-      if (lookbookProbe.data.total === 0) {
-        const params = new URLSearchParams(searchParams.toString());
-        params.set('filter', 'my-looks');
-        router.replace(`/dashboard/outfits?${params.toString()}`);
-      }
-      setDefaultChecked(true);
-    }
-  }, [defaultChecked, lookbookProbe.data, urlFilter, urlView, searchParams, router]);
 
   const updateQuery = useCallback(
     (next: {
@@ -275,9 +228,6 @@ function OutfitsPageContent() {
     const params = new URLSearchParams(searchParams.toString());
     if (next === 'calendar') {
       params.set('view', 'calendar');
-      if (params.get('filter') === 'my-looks') {
-        params.delete('filter');
-      }
     } else {
       params.delete('view');
     }
@@ -470,8 +420,7 @@ function OutfitsPageContent() {
           ))}
         </div>
 
-        {chip === 'my-looks' && (
-          <div className="relative ml-auto min-w-[220px]">
+        <div className="relative ml-auto min-w-[220px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder={t('search')}
@@ -479,8 +428,7 @@ function OutfitsPageContent() {
               onChange={(e) => setSearch(e.target.value)}
               className="pl-9 h-9"
             />
-          </div>
-        )}
+        </div>
 
         {listQuery.data && (
           <Badge variant="outline" className="ml-auto">
@@ -503,14 +451,6 @@ function OutfitsPageContent() {
           ) : outfits.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
               <p className="text-muted-foreground mb-6 max-w-sm">{t(EMPTY_KEYS[chip])}</p>
-              {chip === 'my-looks' && (
-                <Button asChild>
-                  <Link href="/dashboard/outfits/new">
-                    <Plus className="h-4 w-4 mr-2" />
-                    {t('newOutfit')}
-                  </Link>
-                </Button>
-              )}
             </div>
           ) : (
             <>
