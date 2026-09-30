@@ -20,9 +20,12 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
 def _settings():
     """Accessed, not snapshotted: a module-level copy would freeze the env at import."""
     return get_settings()
+
 
 SUPPORTED_FORMATS = {"JPEG", "PNG", "WEBP"}
 _ALLOWED_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
@@ -105,7 +108,11 @@ def process_upload(image_bytes: bytes, content_type: str | None) -> dict[str, An
 
     original = _encode(img, _settings().medium_size * 3)
     thumbnail = _encode(img, _settings().thumbnail_size)
-    medium = _encode(img, _settings().medium_size) if max(img.size) > _settings().thumbnail_size else None
+    medium = (
+        _encode(img, _settings().medium_size)
+        if max(img.size) > _settings().thumbnail_size
+        else None
+    )
     return {"original": original, "thumbnail": thumbnail, "medium": medium}
 
 

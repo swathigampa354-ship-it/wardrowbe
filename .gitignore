@@ -20,3 +20,7 @@ storage/
 
 # build artifacts that must not be committed
 frontend/tsconfig.tsbuildinfo
+
+# local preview scratch space (python3 -m tests.preview_stack)
+.next/
+.preview-storage/

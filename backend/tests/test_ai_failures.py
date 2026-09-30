@@ -11,9 +11,9 @@ import os
 import socket
 import tempfile
 import threading
-from pathlib import Path
 import time
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 from PIL import Image, PngImagePlugin
@@ -48,14 +48,14 @@ def _img(tag: str | None = None, mode: str | None = None) -> bytes:
 
 
 def _upload(client, mode: str | None = None, tag: str = "shirt"):
-    return client.post(
-        "/api/v1/items", files={"image": ("a.png", _img(tag, mode), "image/png")}
-    )
+    return client.post("/api/v1/items", files={"image": ("a.png", _img(tag, mode), "image/png")})
 
 
 def _clean_upload(client, tag: str = "shirt"):
     """No directive in the image, so the stub answers in its env-configured mode."""
-    return client.post("/api/v1/items", files={"image": (f"{tag}.png", _img(tag, None), "image/png")})
+    return client.post(
+        "/api/v1/items", files={"image": (f"{tag}.png", _img(tag, None), "image/png")}
+    )
 
 
 @pytest.fixture()
@@ -136,7 +136,8 @@ def test_failed_analysis_can_be_retried_until_it_works(client):
     clean = io.BytesIO()
     Image.new("RGB", (300, 400), (90, 90, 160)).save(clean, format="PNG")  # no directive at all
     replaced = client.put(
-        f"/api/v1/items/{item_id}/image", files={"image": ("clean.png", clean.getvalue(), "image/png")}
+        f"/api/v1/items/{item_id}/image",
+        files={"image": ("clean.png", clean.getvalue(), "image/png")},
     )
     assert replaced.status_code == 200, replaced.text
 
@@ -188,7 +189,9 @@ def test_no_ai_configured_saves_unanalyzed_and_blocks_suggestions(client):
     config.get_settings.cache_clear()
     ai_service._service = None
     try:
-        response = client.post("/api/v1/items", files={"image": ("a.png", _img("shirt"), "image/png")})
+        response = client.post(
+            "/api/v1/items", files={"image": ("a.png", _img("shirt"), "image/png")}
+        )
         assert response.status_code == 201
         assert "AI_BASE_URL is not configured" in response.json()["ai_error"]
         assert response.json()["status"] == "error"
@@ -263,7 +266,7 @@ def test_provider_rejecting_extra_params_retries_without_them(client):
 
 
 def test_out_of_domain_type_is_distinguishable(client):
-    """"tights" must not be silently flattened into "unknown"."""
+    """ "tights" must not be silently flattened into "unknown"."""
     body = _upload(client, "ood_type").json()
     assert body["type"] == "unknown"
     assert body["ai_unrecognized_type"] == "tights"
@@ -274,7 +277,9 @@ def test_image_and_outfit_parsers_accept_messy_output(tmp_path, monkeypatch):
     from app.ai_service import AIResponseUnparsableError, extract_json
     from app.outfit_service import _parse_outfits
 
-    assert extract_json('Here you go:\n```json\n{"type":"hat"}\n```\nHope that helps') == {"type": "hat"}
+    assert extract_json('Here you go:\n```json\n{"type":"hat"}\n```\nHope that helps') == {
+        "type": "hat"
+    }
     assert extract_json('{"type":"hat" /* c */}') == {"type": "hat"}
     assert extract_json('prefix {"a": [1,2]} suffix') == {"a": [1, 2]}
     with pytest.raises(AIResponseUnparsableError):
@@ -290,7 +295,9 @@ def test_image_and_outfit_parsers_accept_messy_output(tmp_path, monkeypatch):
 
 
 def test_image_validation_errors(client):
-    bad = client.post("/api/v1/items", files={"image": ("x.png", b"definitely not a png", "image/png")})
+    bad = client.post(
+        "/api/v1/items", files={"image": ("x.png", b"definitely not a png", "image/png")}
+    )
     assert bad.status_code == 400
     assert "readable image" in bad.json()["detail"]
 
@@ -358,3 +365,29 @@ def test_bulk_upload_holds_up_under_concurrency(client, monkeypatch):
         assert client.get("/api/v1/items").json()["total"] == 8
     finally:
         config.get_settings.cache_clear()
+
+
+def test_store_is_memoised_across_reads(monkeypatch, tmp_path):
+    """`get_store()` used to rebuild LocalBlobStore on *every* call: the cache-validity check
+    compared `_store_root` (never set) with `storage_dir`. Harmless functionally, but it meant a
+    mkdir + resolve per image read and one EPHEMERAL warning per request in the logs, so a busy
+    wardrobe looked like a storage error in every log line."""
+    from app import storage
+
+    storage.reset_store()
+    calls = []
+    real = storage.LocalBlobStore
+
+    def counting(root=None):
+        calls.append(root)
+        return real(tmp_path)
+
+    monkeypatch.setattr(storage, "LocalBlobStore", counting)
+    monkeypatch.setattr(storage._settings(), "storage_dir", str(tmp_path), raising=False)
+
+    first = storage.get_store()
+    second = storage.get_store()
+    third = storage.get_store()
+    assert len(calls) == 1, f"store rebuilt {len(calls)} times for 3 reads"
+    assert first is second is third
+    storage.reset_store()

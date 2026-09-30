@@ -95,7 +95,9 @@ class ClothingItem(Base):
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
 
     user: Mapped[User] = relationship(back_populates="items")
 
@@ -123,7 +125,9 @@ class Outfit(Base):
     feedback: Mapped[dict | None] = mapped_column(JSON)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
 
     items: Mapped[list["OutfitItem"]] = relationship(
         back_populates="outfit", cascade="all, delete-orphan", order_by="OutfitItem.position"
@@ -136,9 +140,7 @@ class OutfitItem(Base):
     __tablename__ = "outfit_items"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    outfit_id: Mapped[str] = mapped_column(
-        ForeignKey("outfits.id", ondelete="CASCADE"), index=True
-    )
+    outfit_id: Mapped[str] = mapped_column(ForeignKey("outfits.id", ondelete="CASCADE"), index=True)
     item_id: Mapped[str] = mapped_column(
         ForeignKey("clothing_items.id", ondelete="CASCADE"), index=True
     )

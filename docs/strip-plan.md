@@ -64,6 +64,13 @@ Kept, with the dead calls cut out of them: the dashboard shell and sidebar, the 
 `OutfitDisplay` → `useAcceptOutfit`), the outfit history + detail pages, and the settings page
 (reduced to profile / location / preferences / data-and-limits).
 
+Every `t()` call site in the trial is resolved against `messages/en/` by
+`frontend/scripts/i18n-keys.mjs` (`npm run i18n:check`, wired into CI). That gate is the reason the
+locale strip is safe to trust: it caught four `common.notFound*` keys the Server Component 404 page
+needed, five dead `outfits.cards.*` source badges, and `common.sort` left without a caller — none of
+which `tsc`, eslint or `next build` can see, because `t()` takes a plain string. The upstream
+`i18n:parity` / `i18n:scan` scripts are not kept: with one locale there is nothing to keep in sync.
+
 `lib/hooks/use-auth.ts` is now a session-free shim that returns the implicit demo user. It also
 documents the re-enable path (restore `middleware.ts`, the `[...nextauth]` route, and this file's
 `signIn` call) for when auth comes back. `components/locale-switcher.tsx` is pinned to English for

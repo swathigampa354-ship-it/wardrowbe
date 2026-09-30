@@ -2,16 +2,15 @@
 single-upload and bulk-upload paths so their failure handling cannot drift.
 """
 
+import asyncio
 import logging
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai_service import AIError, ClothingTags, get_ai
-import asyncio
-from contextlib import asynccontextmanager
-from collections.abc import AsyncGenerator
-from typing import AsyncIterator
 from app.config import get_settings
 from app.images import ImageValidationError, new_keys, process_upload
 from app.models import ClothingItem
@@ -93,7 +92,9 @@ def apply_tags(item: ClothingItem, tags: ClothingTags) -> None:
     item.style = tags.style
     item.season = tags.season
     item.ai_description = tags.description
-    item.ai_confidence = tags.logprobs_confidence if tags.logprobs_confidence is not None else tags.confidence
+    item.ai_confidence = (
+        tags.logprobs_confidence if tags.logprobs_confidence is not None else tags.confidence
+    )
     item.ai_processed = True
     item.ai_unrecognized_type = tags.unrecognized_type
     item.status = "ready"
@@ -288,14 +289,13 @@ async def analyze_item_row(item_id: str) -> str | None:
     Only ever call this from a task that is *not* a request handler: it takes
     the writer slot itself, and a request already holds it for its whole life
     (app/database.py:get_db) - the same task would wait on itself forever.
-    
+
 
     Returns the AI error message, or None. Any failure is stored on the row as
     ``status='error'`` + ``ai_error`` rather than raised: nobody is awaiting
     this call, so a raised error would only end up in the logs.
     """
     from app.models import ClothingItem
-
     from app.storage import get_store
 
     async with writing_session() as session:
@@ -349,30 +349,30 @@ async def requeue_orphaned_analysis() -> int:
     from app.models import ClothingItem
 
     async with writing_session() as session:
-            ids = list(
-                (
-                    await session.execute(
-                        select(ClothingItem.id).where(ClothingItem.status == "processing")
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            if not ids:
-                return 0
-            await session.execute(
-                update(ClothingItem)
-                .where(ClothingItem.id.in_(ids))
-                .values(
-                    status="error",
-                    ai_error=(
-                        "Analysis was interrupted when the server restarted. "
-                        "Use Re-analyze to try again."
-                    ),
-                    ai_completed_at=datetime.now(UTC),
+        ids = list(
+            (
+                await session.execute(
+                    select(ClothingItem.id).where(ClothingItem.status == "processing")
                 )
             )
-            return len(ids)
+            .scalars()
+            .all()
+        )
+        if not ids:
+            return 0
+        await session.execute(
+            update(ClothingItem)
+            .where(ClothingItem.id.in_(ids))
+            .values(
+                status="error",
+                ai_error=(
+                    "Analysis was interrupted when the server restarted. "
+                    "Use Re-analyze to try again."
+                ),
+                ai_completed_at=datetime.now(UTC),
+            )
+        )
+        return len(ids)
 
 
 __all__ = [

@@ -30,9 +30,13 @@ from app.storage import image_url
 from app.weather import current_weather
 
 logger = logging.getLogger(__name__)
+
+
 def _settings():
     """Accessed, not snapshotted: a module-level copy would freeze the env at import."""
     return get_settings()
+
+
 router = APIRouter(prefix="/outfits", tags=["outfits"])
 
 
@@ -64,7 +68,11 @@ async def build_outfit_response(db: AsyncSession, outfit: Outfit) -> OutfitRespo
     ).all()
 
     total_items = (
-        await db.execute(select(func.count()).select_from(ClothingItem).where(ClothingItem.user_id == outfit.user_id))
+        await db.execute(
+            select(func.count())
+            .select_from(ClothingItem)
+            .where(ClothingItem.user_id == outfit.user_id)
+        )
     ).scalar_one()
 
     palette = [i.primary_color for i, _ in rows if i.primary_color]
@@ -100,7 +108,9 @@ async def _owned_outfit(db: AsyncSession, user_id: str, outfit_id: str) -> Outfi
 
 
 @router.post("/suggest", response_model=OutfitResponse)
-async def suggest_one(payload: SuggestRequest, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser) -> OutfitResponse:
+async def suggest_one(
+    payload: SuggestRequest, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser
+) -> OutfitResponse:
     outfits = await _generate(db, user.id, payload, count=1)
     return await build_outfit_response(db, outfits[0])
 
@@ -114,7 +124,9 @@ async def suggest_options(
     return [await build_outfit_response(db, outfit) for outfit in outfits]
 
 
-async def _generate(db: AsyncSession, user_id: str, payload: SuggestRequest, *, count: int) -> list[Outfit]:
+async def _generate(
+    db: AsyncSession, user_id: str, payload: SuggestRequest, *, count: int
+) -> list[Outfit]:
     weather_payload: dict[str, Any] | None = None
     if payload.weather_override:
         w = payload.weather_override
@@ -150,7 +162,9 @@ async def _generate(db: AsyncSession, user_id: str, payload: SuggestRequest, *, 
     except NotEnoughItemsError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except AIError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
 
 
 @router.get("", response_model=OutfitListResponse)
@@ -168,7 +182,9 @@ async def list_outfits(
     del search  # nothing to full-text match on now that notes/family ratings are gone
     conditions = [Outfit.user_id == user.id]
     if status_filter:
-        conditions.append(Outfit.status.in_([s.strip() for s in status_filter.split(",") if s.strip()]))
+        conditions.append(
+            Outfit.status.in_([s.strip() for s in status_filter.split(",") if s.strip()])
+        )
     if occasion:
         conditions.append(Outfit.occasion == occasion)
     if date_from:
@@ -181,9 +197,15 @@ async def list_outfits(
     rows = list(
         (
             await db.execute(
-                select(Outfit).where(where).order_by(Outfit.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+                select(Outfit)
+                .where(where)
+                .order_by(Outfit.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     return OutfitListResponse(
         outfits=[await build_outfit_response(db, outfit) for outfit in rows],
@@ -196,17 +218,23 @@ async def list_outfits(
 
 @router.get("/pending", response_model=OutfitListResponse)
 async def pending_outfits(
-    db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser, limit: int = Query(3, ge=1, le=20)
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+    limit: int = Query(3, ge=1, le=20),
 ) -> OutfitListResponse:
     return await list_outfits(db, user, page=1, page_size=limit, status_filter="pending")
 
 
 @router.get("/{outfit_id}", response_model=OutfitResponse)
-async def get_outfit(outfit_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser) -> OutfitResponse:
+async def get_outfit(
+    outfit_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser
+) -> OutfitResponse:
     return await build_outfit_response(db, await _owned_outfit(db, user.id, outfit_id))
 
 
-async def _set_status(db: AsyncSession, outfit: Outfit, new_status: str, *, count_wear: bool) -> Outfit:
+async def _set_status(
+    db: AsyncSession, outfit: Outfit, new_status: str, *, count_wear: bool
+) -> Outfit:
     outfit.status = new_status
     outfit.updated_at = datetime.now(UTC)
     if count_wear:
@@ -218,7 +246,9 @@ async def _set_status(db: AsyncSession, outfit: Outfit, new_status: str, *, coun
                     .join(OutfitItem, OutfitItem.item_id == ClothingItem.id)
                     .where(OutfitItem.outfit_id == outfit.id)
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
         for item in items:
             item.wear_count = (item.wear_count or 0) + 1
@@ -229,21 +259,27 @@ async def _set_status(db: AsyncSession, outfit: Outfit, new_status: str, *, coun
 
 
 @router.post("/{outfit_id}/accept", response_model=OutfitResponse)
-async def accept_outfit(outfit_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser) -> OutfitResponse:
+async def accept_outfit(
+    outfit_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser
+) -> OutfitResponse:
     outfit = await _owned_outfit(db, user.id, outfit_id)
     outfit = await _set_status(db, outfit, "accepted", count_wear=True)
     return await build_outfit_response(db, outfit)
 
 
 @router.post("/{outfit_id}/reject", response_model=OutfitResponse)
-async def reject_outfit(outfit_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser) -> OutfitResponse:
+async def reject_outfit(
+    outfit_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser
+) -> OutfitResponse:
     outfit = await _owned_outfit(db, user.id, outfit_id)
     outfit = await _set_status(db, outfit, "rejected", count_wear=False)
     return await build_outfit_response(db, outfit)
 
 
 @router.post("/{outfit_id}/skip", response_model=OutfitResponse)
-async def skip_outfit(outfit_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser) -> OutfitResponse:
+async def skip_outfit(
+    outfit_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser
+) -> OutfitResponse:
     outfit = await _owned_outfit(db, user.id, outfit_id)
     outfit = await _set_status(db, outfit, "skipped", count_wear=False)
     return await build_outfit_response(db, outfit)
@@ -270,7 +306,8 @@ async def feedback(
 
 
 @router.delete("/{outfit_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_outfit(outfit_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser) -> None:
+async def delete_outfit(
+    outfit_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser
+) -> None:
     await db.delete(await _owned_outfit(db, user.id, outfit_id))
     await db.flush()
-

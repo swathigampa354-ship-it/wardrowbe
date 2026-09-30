@@ -18,9 +18,12 @@ from app.config import get_settings
 from app.models import User
 
 logger = logging.getLogger(__name__)
+
+
 def _settings():
     """Accessed, not snapshotted: a module-level copy would freeze the env at import."""
     return get_settings()
+
 
 CONDITIONS = {
     0: "clear",

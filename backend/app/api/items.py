@@ -32,13 +32,12 @@ from app.auth import CurrentUser
 from app.config import get_settings
 from app.database import get_db, get_session_maker
 from app.deps import (
-    analyze_item_row
-    ,
-    writer_lock,
+    analyze_item_row,
     apply_manual_edits,
     apply_tags,
     build_item_response,
     store_and_analyze,
+    writer_lock,
 )
 from app.images import ImageValidationError
 from app.models import ClothingItem
@@ -184,7 +183,9 @@ async def item_types(db: Annotated[AsyncSession, Depends(get_db)], user: Current
 
 
 @router.get("/tagging-progress", response_model=TaggingProgress)
-async def tagging_progress(db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser) -> TaggingProgress:
+async def tagging_progress(
+    db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser
+) -> TaggingProgress:
     """With synchronous processing there is never a backlog, but the UI still
     asks, so report real counts from the table instead of deleting the endpoint."""
     rows = (
@@ -204,7 +205,9 @@ async def tagging_progress(db: Annotated[AsyncSession, Depends(get_db)], user: C
 
 
 @router.get("/{item_id}", response_model=ItemResponse)
-async def get_item(item_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser) -> ItemResponse:
+async def get_item(
+    item_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser
+) -> ItemResponse:
     return build_item_response(await _owned_item(db, user.id, item_id))
 
 
@@ -236,16 +239,16 @@ async def create_item(
         # tags), so it holds the writer slot for the duration - on purpose: on
         # SQLite that write window is all the writer slot has to offer anyway,
         # and it is one item, not a wardrobe.
-          item, ai_error = await store_and_analyze(
-              db,
-              user_id=user.id,
-              image_bytes=data,
-              content_type=image.content_type,
-              name=name,
-              skip_ai=bool(skip_ai),
-              upload_key=upload_key,
-              filename=image.filename or "upload.jpg",
-          )
+        item, ai_error = await store_and_analyze(
+            db,
+            user_id=user.id,
+            image_bytes=data,
+            content_type=image.content_type,
+            name=name,
+            skip_ai=bool(skip_ai),
+            upload_key=upload_key,
+            filename=image.filename or "upload.jpg",
+        )
     except ImageValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -295,7 +298,8 @@ async def create_items_bulk(
         raise HTTPException(status_code=400, detail="No files were attached.")
     if len(images) > settings.max_bulk_upload_count:
         raise HTTPException(
-            status_code=400, detail=f"Maximum {settings.max_bulk_upload_count} images per bulk upload"
+            status_code=400,
+            detail=f"Maximum {settings.max_bulk_upload_count} images per bulk upload",
         )
 
     payloads = [(f, await _read_upload(f)) for f in images]
@@ -326,7 +330,9 @@ async def create_items_bulk(
                             defer_analysis=not skip_ai,
                         )
                     except ImageValidationError as exc:
-                        return BulkUploadResult(filename=filename, success=False, error=str(exc)), False
+                        return BulkUploadResult(
+                            filename=filename, success=False, error=str(exc)
+                        ), False
             return (
                 BulkUploadResult(
                     filename=filename,
@@ -378,11 +384,15 @@ async def bulk_delete(
                     ClothingItem.user_id == user.id, ClothingItem.id.in_(item_ids)
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     keys: list[str] = []
     for row in rows:
-        keys.extend(k for k in (row.image_key, row.thumbnail_key, row.medium_key, row.original_key) if k)
+        keys.extend(
+            k for k in (row.image_key, row.thumbnail_key, row.medium_key, row.original_key) if k
+        )
         await db.delete(row)
     await db.flush()
     await get_store().delete(keys)
@@ -423,16 +433,22 @@ async def update_item(
 
 
 @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_item(item_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser) -> None:
+async def delete_item(
+    item_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser
+) -> None:
     item = await _owned_item(db, user.id, item_id)
-    keys = [k for k in (item.image_key, item.thumbnail_key, item.medium_key, item.original_key) if k]
+    keys = [
+        k for k in (item.image_key, item.thumbnail_key, item.medium_key, item.original_key) if k
+    ]
     await db.delete(item)
     await db.flush()
     await get_store().delete(keys)
 
 
 @router.post("/{item_id}/analyze", response_model=ItemResponse)
-async def analyze_item(item_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser) -> ItemResponse:
+async def analyze_item(
+    item_id: str, db: Annotated[AsyncSession, Depends(get_db)], user: CurrentUser
+) -> ItemResponse:
     """Manual (re-)analysis. No cooldown: the original's 120s floor protected a
     queue-backed worker, and there is no queue here.
 
@@ -456,7 +472,10 @@ async def analyze_item(item_id: str, db: Annotated[AsyncSession, Depends(get_db)
     if stored is None:
         raise HTTPException(
             status_code=410,
-            detail="The photo for this item is no longer in storage (free-tier disks are wiped on restart).",
+            detail=(
+                "The photo for this item is no longer in storage "
+                "(free-tier disks are wiped on restart)."
+            ),
         )
 
     item.status = "processing"
@@ -470,7 +489,9 @@ async def analyze_item(item_id: str, db: Annotated[AsyncSession, Depends(get_db)
         item.ai_error = str(exc)[:500]
         item.tags = {**(item.tags or {}), "tagging_status": "pending"}
         await db.flush()
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
     apply_tags(item, tags)
     item.ai_completed_at = datetime.now(UTC)
     item.ai_error = None
@@ -529,5 +550,7 @@ async def replace_item_image(
     item.ai_error = None
     await db.delete(fresh)
     await db.flush()
-    await get_store().delete([k for k in old_keys if k not in {item.image_key, item.thumbnail_key, item.medium_key}])
+    await get_store().delete(
+        [k for k in old_keys if k not in {item.image_key, item.thumbnail_key, item.medium_key}]
+    )
     return build_item_response(item)

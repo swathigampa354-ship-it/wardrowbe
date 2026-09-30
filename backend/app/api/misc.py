@@ -8,7 +8,7 @@ they fit here.
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,9 +28,12 @@ from app.storage import get_store, probe_connectivity
 from app.weather import current_weather, fetch_weather, geocode
 
 logger = logging.getLogger(__name__)
+
+
 def _settings():
     """Accessed, not snapshotted: a module-level copy would freeze the env at import."""
     return get_settings()
+
 
 router = APIRouter()
 images_router = APIRouter(prefix="/images", tags=["images"])
@@ -87,10 +90,11 @@ async def update_me(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UserResponse:
-    del db
     for key, value in payload.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(user, key, value)
+    # flush, not just mutate: get_db commits on the way out, but the response is
+    # serialized from `user` here, so the row must be consistent first.
     await db.flush()
     return UserResponse.model_validate(user)
 
@@ -119,7 +123,9 @@ async def set_location(
 
 
 @router.post("/users/me/onboarding/complete", response_model=UserResponse, tags=["users"])
-async def complete_onboarding(user: CurrentUser, db: Annotated[AsyncSession, Depends(get_db)]) -> UserResponse:
+async def complete_onboarding(
+    user: CurrentUser, db: Annotated[AsyncSession, Depends(get_db)]
+) -> UserResponse:
     await db.flush()
     return UserResponse.model_validate(user)
 
@@ -128,12 +134,17 @@ async def complete_onboarding(user: CurrentUser, db: Annotated[AsyncSession, Dep
 @router.get("/weather/current", tags=["weather"])
 async def weather_current(user: CurrentUser, db: Annotated[AsyncSession, Depends(get_db)]) -> dict:
     if not _settings().weather_enabled:
-        raise HTTPException(status_code=503, detail="Weather is disabled on this instance (WEATHER_ENABLED=false).")
+        raise HTTPException(
+            status_code=503, detail="Weather is disabled on this instance (WEATHER_ENABLED=false)."
+        )
     payload = await current_weather(db, user.id)
     if payload is None:
         raise HTTPException(
             status_code=404,
-            detail="No location set. Set one in Settings, or configure DEFAULT_LATITUDE/DEFAULT_LONGITUDE.",
+            detail=(
+                "No location set. Set one in Settings, or configure "
+                "DEFAULT_LATITUDE/DEFAULT_LONGITUDE."
+            ),
         )
     return payload
 
@@ -189,7 +200,9 @@ async def get_image(key: str, size: str = "original") -> Response:
     # spin-up of a free instance should not refetch every gallery tile.
     max_age = "604800" if store.persistent else "86400"
     return Response(
-        content=data, media_type=content_type, headers={"Cache-Control": f"public, max-age={max_age}"}
+        content=data,
+        media_type=content_type,
+        headers={"Cache-Control": f"public, max-age={max_age}"},
     )
 
 
@@ -238,7 +251,10 @@ async def health_storage() -> dict:
         "backend": "local",
         "path": _settings().storage_dir,
         "persistent": False,
-        "note": "Local disk on Render Free is ephemeral: uploads are lost on redeploy, restart, or spin-down.",
+        "note": (
+            "Local disk on Render Free is ephemeral: uploads are lost "
+            "on redeploy, restart, or spin-down."
+        ),
     }
 
 

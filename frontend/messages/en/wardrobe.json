@@ -53,7 +53,8 @@
     "confident": "{percent}% confident",
     "dismiss": "Dismiss",
     "failedCount": "{count} failed",
-    "reanalyzed": "Re-analysis started"
+    "reanalyzed": "Re-analysis started",
+    "retryError": "Could not start re-analysis. Check the AI settings and try again."
   },
   "allTypes": "All types",
   "bulkActions": {

@@ -1,0 +1,33 @@
+# Lint/format config only - this project has no packaging step (the app is run
+# from source: `uvicorn app.main:app`). Kept in sync with the CI job.
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["storage"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+# Both files are literal payloads on purpose: the few-shot example keeps its
+# single-line JSON so the model sees the shape it must imitate, and the stub
+# provider has to answer with a matching compact blob.
+"app/prompts.py" = ["E501"]
+"tests/fake_provider.py" = ["E501"]
+# Test bodies stay one-liners on purpose: `assert x, r.text[:200]` reads better
+# than a wrapped version and the context is the failure message itself.
+"tests/*" = ["E501", "B017"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

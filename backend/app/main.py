@@ -25,9 +25,12 @@ from app.config import get_settings
 from app.database import dispose_engine, init_db
 from app.deps import requeue_orphaned_analysis
 
+
 def _settings():
     """Accessed, not snapshotted: a module-level copy would freeze the env at import."""
     return get_settings()
+
+
 logging.basicConfig(
     level=logging.DEBUG if _settings().debug else logging.INFO,
     format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
@@ -47,11 +50,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.warning("Reset %d item(s) left 'processing' by a previous shutdown", n)
     except Exception:  # pragma: no cover - never block startup on cleanup
         logger.exception("Could not reset orphaned 'processing' rows")
-    logger.info("Auth: %s", "token required" if _settings().require_auth else "none (single demo user)")
+    logger.info(
+        "Auth: %s", "token required" if _settings().require_auth else "none (single demo user)"
+    )
     if _settings().ai_configured:
-        logger.info("AI: %s vision=%s text=%s", _settings().ai_base_url, _settings().ai_vision_model, _settings().ai_text_model)
+        logger.info(
+            "AI: %s vision=%s text=%s",
+            _settings().ai_base_url,
+            _settings().ai_vision_model,
+            _settings().ai_text_model,
+        )
     else:
-        logger.warning("AI: not configured - uploads will save without tags and suggestions will 503")
+        logger.warning(
+            "AI: not configured - uploads will save without tags and suggestions will 503"
+        )
     if _settings().s3_enabled:
         logger.info("Storage: S3 bucket %s (persistent)", _settings().storage_s3_bucket)
     else:
@@ -99,6 +111,7 @@ async def ensure_schema(request, call_next):
         _db_ready = True
     return await call_next(request)
 
+
 app.include_router(misc_router, prefix="/api/v1")
 app.include_router(items_router, prefix="/api/v1")
 app.include_router(outfits_router, prefix="/api/v1")
@@ -123,7 +136,9 @@ async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "The server hit an unexpected error. The item was not lost - try again."},
+        content={
+            "detail": "The server hit an unexpected error. The item was not lost - try again."
+        },
     )
 
 

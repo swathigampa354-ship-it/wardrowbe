@@ -92,6 +92,19 @@ type error survived.
 | Nginx, Caddy, K8s manifests | multi-service routing | Render's own TLS/routing on the single service |
 | Multi-image galleries, rotate, wash log | per-item image management | one image per item; `PUT /items/{id}/image` replaces it |
 
+## Previewing it locally
+
+```bash
+cd frontend && npm run build          # standalone output, 3 extras copied automatically
+cd ../backend && python3 -m tests.preview_stack
+# -> UI http://127.0.0.1:3000, API http://127.0.0.1:8000, stub AI on a free port
+```
+
+`tests/preview_stack.py` runs the stdlib stub provider, so uploads come back tagged
+without an API key or quota - the same stub `tests/e2e.py` drives. It is a dev tool, not
+a deployment path: production uses `backend/entrypoint.sh`, which starts the same two
+processes against the real provider.
+
 ## Files that used to be here
 
 `docker-compose.yml` had 6 services (postgres, redis, backend, frontend, worker, image-worker);

@@ -18,7 +18,6 @@ from typing import Annotated, Any
 
 import jwt
 from fastapi import Depends, Header, HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -26,9 +25,12 @@ from app.database import get_db
 from app.models import User
 
 logger = logging.getLogger(__name__)
+
+
 def _settings():
     """Accessed, not snapshotted: a module-level copy would freeze the env at import."""
     return get_settings()
+
 
 DEMO_USER_ID = "00000000-0000-0000-0000-000000000001"
 DEMO_USER_EMAIL = "demo@wardrowbe.local"
@@ -100,7 +102,9 @@ async def get_current_user(
         )
     user_id = _decode_token(authorization.split(" ", 1)[1].strip())
     if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token"
+        )
 
     user = await db.get(User, user_id)
     if user is None:
