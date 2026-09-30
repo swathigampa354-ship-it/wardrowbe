@@ -26,9 +26,12 @@ import httpx
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
 def _settings():
     """Accessed, not snapshotted: a module-level copy would freeze the env at import."""
     return get_settings()
+
 
 _IMAGE_CONTENT_TYPES = {
     ".jpg": "image/jpeg",
@@ -184,7 +187,11 @@ def reset_store() -> None:
 def get_store() -> BlobStore:
     """Cached backend, invalidated if STORAGE_DIR moves underneath us."""
     global _store, _store_root
-    if _store is not None and not _settings().s3_enabled and _store_root != str(_settings().storage_dir):
+    if (
+        _store is not None
+        and not _settings().s3_enabled
+        and _store_root != str(_settings().storage_dir)
+    ):
         reset_store()
     if _store is None:
         if _settings().s3_enabled:
@@ -199,6 +206,10 @@ def get_store() -> BlobStore:
                 _store = LocalBlobStore()
         else:
             _store = LocalBlobStore()
+            # Record the root this instance was built for, otherwise the check above always
+            # sees None != storage_dir, and every image read re-invents the store (mkdir +
+            # resolve + a repeated EPHEMERAL warning per request).
+            _store_root = str(_settings().storage_dir)
             logger.warning(
                 "Image storage: local disk (%s) — EPHEMERAL on Render Free. "
                 "Uploaded photos are lost on redeploy, restart, or spin-down.",

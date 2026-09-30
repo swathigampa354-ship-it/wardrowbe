@@ -79,7 +79,15 @@ def season_for(day: date | None = None, latitude: float | None = None) -> str:
     """Northern-hemisphere default; flipped south of the equator."""
     d = day or datetime.now(UTC).date()
     month = d.month
-    northern = 3 <= month <= 5 and "spring" or 6 <= month <= 8 and "summer" or 9 <= month <= 11 and "fall" or "winter"
+    northern = (
+        3 <= month <= 5
+        and "spring"
+        or 6 <= month <= 8
+        and "summer"
+        or 9 <= month <= 11
+        and "fall"
+        or "winter"
+    )
     if latitude is not None and latitude < 0:
         flip = {"spring": "fall", "summer": "winter", "fall": "spring", "winter": "summer"}
         return flip[northern]
@@ -192,7 +200,15 @@ def select_candidates(scored: list[ScoredItem]) -> list[ScoredItem]:
         layer = layer_of(entry.item.type) or "other"
         by_layer[layer].append(entry)
 
-    quotas = {"top": 12, "bottom": 10, "dress": 8, "shoes": 8, "layer": 8, "accessory": 8, "other": 4}
+    quotas = {
+        "top": 12,
+        "bottom": 10,
+        "dress": 8,
+        "shoes": 8,
+        "layer": 8,
+        "accessory": 8,
+        "other": 4,
+    }
     chosen: list[ScoredItem] = []
     for layer, quota in quotas.items():
         pool = sorted(by_layer.get(layer, []), key=lambda e: e.score, reverse=True)[:quota]
@@ -292,9 +308,7 @@ def _parse_outfits(content: str, number_map: dict[int, str]) -> list[dict[str, A
             }
         )
     if not outfits:
-        raise AIError(
-            "The AI didn't return any usable outfits (no valid item numbers). Try again."
-        )
+        raise AIError("The AI didn't return any usable outfits (no valid item numbers). Try again.")
     return outfits[:3]
 
 
@@ -323,7 +337,8 @@ async def generate_outfits(
 
     if not items:
         raise NotEnoughItemsError(
-            "Your wardrobe is empty. Upload at least one top, one bottom and one pair of shoes first."
+            "Your wardrobe is empty. Upload at least one top, one bottom "
+            "and one pair of shoes first."
         )
 
     by_layer = defaultdict(list)
@@ -341,9 +356,7 @@ async def generate_outfits(
             "(or a dress plus shoes). Upload more and try again."
         )
     if not by_layer["shoes"]:
-        raise NotEnoughItemsError(
-            "Add at least one pair of shoes so the outfit can be completed."
-        )
+        raise NotEnoughItemsError("Add at least one pair of shoes so the outfit can be completed.")
 
     scored = score_items(items, weather, occasion, season, today)
     candidates = select_candidates(scored)
@@ -371,7 +384,9 @@ async def generate_outfits(
 
     ai = get_ai()
     try:
-        content = await ai.generate_text(system="Create complete outfits from a wardrobe.", user=prompt)
+        content = await ai.generate_text(
+            system="Create complete outfits from a wardrobe.", user=prompt
+        )
     except AIError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -384,7 +399,7 @@ async def generate_outfits(
     # the requested piece into the first outfit rather than failing the request.
     if include_items:
         requested = [i for i in include_items if i in set(number_map.values())]
-        if requested and not requested[0] in parsed[0]["item_ids"]:
+        if requested and requested[0] not in parsed[0]["item_ids"]:
             parsed[0]["item_ids"] = [requested[0]] + [
                 i for i in parsed[0]["item_ids"] if i != requested[0]
             ][:5]
@@ -409,7 +424,8 @@ async def generate_outfits(
             created_at=datetime.now(UTC),
         )
         outfit.items = [
-            OutfitItem(item_id=item_id, position=pos) for pos, item_id in enumerate(entry["item_ids"])
+            OutfitItem(item_id=item_id, position=pos)
+            for pos, item_id in enumerate(entry["item_ids"])
         ]
         db.add(outfit)
         rows.append(outfit)
@@ -420,8 +436,9 @@ async def generate_outfits(
         await db.execute(
             update(ClothingItem)
             .where(ClothingItem.id.in_(touched))
-            .values(suggestion_count=func.coalesce(ClothingItem.suggestion_count, 0) + 1, last_suggested_at=today)
+            .values(
+                suggestion_count=func.coalesce(ClothingItem.suggestion_count, 0) + 1,
+                last_suggested_at=today,
+            )
         )
     return rows
-
-

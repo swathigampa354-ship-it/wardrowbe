@@ -1,0 +1,29 @@
+# The trial in its deployment shape, locally: one service, one port.
+#
+#   AI_API_KEY=*** docker compose up --build
+#   -> http://localhost:10000
+#
+# Only two things to know:
+#  * ./storage is mounted so a rebuild does not eat your demo photos (Render's
+#    free tier gives you no such mount - see docs/free-tier-limits.md).
+#  * No database service. With no DATABASE_URL the app uses SQLite inside
+#    ./storage, which is the whole point of the trial.
+services:
+  wardrowbe:
+    build: .
+    image: wardrowbe-trial
+    ports:
+      - "10000:10000"
+    environment:
+      AI_BASE_URL: ${AI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_VISION_MODEL: ${AI_VISION_MODEL:-gemini-2.5-flash}
+      AI_TEXT_MODEL: ${AI_TEXT_MODEL:-gemini-2.5-flash}
+      AI_UPLOAD_CONCURRENCY: ${AI_UPLOAD_CONCURRENCY:-3}
+      WEATHER_ENABLED: ${WEATHER_ENABLED:-true}
+      DEFAULT_LATITUDE: ${DEFAULT_LATITUDE:-17.385}
+      DEFAULT_LONGITUDE: ${DEFAULT_LONGITUDE:-78.4867}
+      DEBUG: "false"
+    volumes:
+      - ./storage:/data/wardrobe
+    restart: unless-stopped

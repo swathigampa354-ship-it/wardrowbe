@@ -1,0 +1,125 @@
+name: CI
+
+# The trial has one backend, one frontend and one image, so this is one job per
+# language plus a build smoke test - no Postgres/Redis services, no coverage
+# upload, no multi-arch matrix. Everything here runs in well under a minute on
+# a free runner, and every command below is a command the repo owner can run.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (ruff + pytest + e2e)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-test.txt
+
+      - name: Install
+        run: |
+          pip install -r requirements.txt -r requirements-test.txt
+          pip install ruff
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Format check (ruff)
+        run: ruff format --check .
+
+      - name: Tests
+        env:
+          SECRET_KEY: ci-only-secret
+          STORAGE_DIR: /tmp/wardrowbe-ci
+        run: python -m pytest
+
+      # Boots the app in-process against the stdlib stub provider in
+      # tests/fake_provider.py: no network, no API key, no quota.
+      - name: End-to-end workflow (8 steps, 62 assertions)
+        env:
+          SECRET_KEY: ci-only-secret
+          STORAGE_DIR: /tmp/wardrowbe-ci
+        run: python -m tests.e2e
+
+  frontend:
+    name: Frontend (eslint + tsc + next build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      # t() takes a plain string, so a key that does not exist in messages/en is
+      # invisible to tsc and eslint: it renders as the raw key path, or the page
+      # throws MISSING_MESSAGE. Stripping locales is exactly the kind of change
+      # this catches, so it gates the build.
+      - name: i18n keys resolve
+        run: npm run i18n:check
+
+      # next.config.js turns type and lint errors into build failures, and this
+      # is also the only step that proves `output: 'standalone'` still emits the
+      # server.js the root Dockerfile copies.
+      - name: Build
+        run: npm run build
+
+  actionlint:
+    name: Actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/actionlint
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Build the one image the trial needs
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: wardrowbe-trial:ci
+          cache-from: type=gha,scope=trial
+          cache-to: type=gha,mode=max,scope=trial
+
+      # Fails loudly if the runtime image cannot answer: the container starts
+      # the UI and the API, so this is the closest thing to a smoke test.
+      - name: Boot the image and hit /healthz
+        run: |
+          docker run -d --rm --name trial-ci -p 10000:10000 wardrowbe-trial:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:10000/ >/dev/null; then ok=1; break; fi
+            sleep 2
+          done
+          docker logs trial-ci || true
+          docker rm -f trial-ci >/dev/null 2>&1 || true
+          test -n "$ok" || { echo "container never served /"; exit 1; }

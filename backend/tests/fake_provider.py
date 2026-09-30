@@ -35,7 +35,10 @@ OUTFITS = {
         {
             "items": [1, 2, 3],
             "headline": "Crisp Blue Everyday",
-            "highlights": ["Light blue shirt against navy trousers keeps the palette tight", "Cotton and wool textures contrast without clashing"],
+            "highlights": [
+                "Light blue shirt against navy trousers keeps the palette tight",
+                "Cotton and wool textures contrast without clashing",
+            ],
             "styling_tip": "Half-tuck the shirt to break the line at the waist",
         },
         {
@@ -59,34 +62,90 @@ def mode() -> str:
 
 
 TYPE_PRESETS: dict[str, dict] = {
-    "pants": {"type": "pants", "subtype": "trousers", "primary_color": "navy",
-              "colors": ["navy"], "pattern": "solid", "material": "wool",
-              "formality": "business-casual", "style": ["classic"],
-              "season": ["fall", "winter", "all-season"], "fit": "slim"},
-    "jeans": {"type": "jeans", "subtype": None, "primary_color": "blue",
-              "colors": ["blue"], "pattern": "solid", "material": "denim",
-              "formality": "casual", "style": ["casual"],
-              "season": ["spring", "summer", "fall"], "fit": "regular"},
-    "shoes": {"type": "shoes", "subtype": "loafers", "primary_color": "black",
-              "colors": ["black"], "pattern": "solid", "material": "leather",
-              "formality": "business-casual", "style": ["classic"],
-              "season": ["all-season"], "fit": "regular"},
-    "t-shirt": {"type": "t-shirt", "subtype": None, "primary_color": "white",
-                "colors": ["white"], "pattern": "solid", "material": "cotton",
-                "formality": "very-casual", "style": ["casual", "minimalist"],
-                "season": ["summer"], "fit": "regular"},
-    "sweater": {"type": "sweater", "subtype": "crewneck", "primary_color": "brown",
-                "colors": ["brown", "tan"], "pattern": "knit" and "solid", "material": "knit",
-                "formality": "casual", "style": ["classic"],
-                "season": ["winter", "fall"], "fit": "relaxed"},
-    "jacket": {"type": "jacket", "subtype": "bomber", "primary_color": "olive",
-               "colors": ["olive"], "pattern": "solid", "material": "nylon",
-               "formality": "casual", "style": ["streetwear"],
-               "season": ["spring", "fall"], "fit": "relaxed"},
-    "boots": {"type": "boots", "subtype": "chelsea", "primary_color": "brown",
-              "colors": ["brown"], "pattern": "solid", "material": "leather",
-              "formality": "smart-casual", "style": ["rugged"],
-              "season": ["fall", "winter"], "fit": None},
+    "pants": {
+        "type": "pants",
+        "subtype": "trousers",
+        "primary_color": "navy",
+        "colors": ["navy"],
+        "pattern": "solid",
+        "material": "wool",
+        "formality": "business-casual",
+        "style": ["classic"],
+        "season": ["fall", "winter", "all-season"],
+        "fit": "slim",
+    },
+    "jeans": {
+        "type": "jeans",
+        "subtype": None,
+        "primary_color": "blue",
+        "colors": ["blue"],
+        "pattern": "solid",
+        "material": "denim",
+        "formality": "casual",
+        "style": ["casual"],
+        "season": ["spring", "summer", "fall"],
+        "fit": "regular",
+    },
+    "shoes": {
+        "type": "shoes",
+        "subtype": "loafers",
+        "primary_color": "black",
+        "colors": ["black"],
+        "pattern": "solid",
+        "material": "leather",
+        "formality": "business-casual",
+        "style": ["classic"],
+        "season": ["all-season"],
+        "fit": "regular",
+    },
+    "t-shirt": {
+        "type": "t-shirt",
+        "subtype": None,
+        "primary_color": "white",
+        "colors": ["white"],
+        "pattern": "solid",
+        "material": "cotton",
+        "formality": "very-casual",
+        "style": ["casual", "minimalist"],
+        "season": ["summer"],
+        "fit": "regular",
+    },
+    "sweater": {
+        "type": "sweater",
+        "subtype": "crewneck",
+        "primary_color": "brown",
+        "colors": ["brown", "tan"],
+        "pattern": "knit" and "solid",
+        "material": "knit",
+        "formality": "casual",
+        "style": ["classic"],
+        "season": ["winter", "fall"],
+        "fit": "relaxed",
+    },
+    "jacket": {
+        "type": "jacket",
+        "subtype": "bomber",
+        "primary_color": "olive",
+        "colors": ["olive"],
+        "pattern": "solid",
+        "material": "nylon",
+        "formality": "casual",
+        "style": ["streetwear"],
+        "season": ["spring", "fall"],
+        "fit": "relaxed",
+    },
+    "boots": {
+        "type": "boots",
+        "subtype": "chelsea",
+        "primary_color": "brown",
+        "colors": ["brown"],
+        "pattern": "solid",
+        "material": "leather",
+        "formality": "smart-casual",
+        "style": ["rugged"],
+        "season": ["fall", "winter"],
+        "fit": None,
+    },
 }
 
 
@@ -116,7 +175,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         if self.path.endswith("/models"):
-            self._send(200, {"object": "list", "data": [{"id": "fake-vision"}, {"id": "fake-text"}]})
+            self._send(
+                200, {"object": "list", "data": [{"id": "fake-vision"}, {"id": "fake-text"}]}
+            )
         else:
             self._send(404, {"error": {"message": "not found"}})
 
@@ -145,7 +206,10 @@ class Handler(BaseHTTPRequestHandler):
                     blob = base64.b64decode(url.split(",", 1)[1])
                 except Exception:  # noqa: BLE001
                     continue
-                for key, pattern in (("tag", rb"WARDROBE:tag=([a-z_\-]+)"), ("mode", rb"WARDROBE:mode=([a-z_]+)")):
+                for key, pattern in (
+                    ("tag", rb"WARDROBE:tag=([a-z_\-]+)"),
+                    ("mode", rb"WARDROBE:mode=([a-z_]+)"),
+                ):
                     found = re.search(pattern, blob)
                     if found:
                         if key == "tag":
@@ -199,7 +263,9 @@ class Handler(BaseHTTPRequestHandler):
             content = '"Light blue cotton oxford shirt with a button-down collar."'
 
         if current == "garbage":
-            return self._send(200, {"choices": [{"message": {"content": content}, "finish_reason": "stop"}]})
+            return self._send(
+                200, {"choices": [{"message": {"content": content}, "finish_reason": "stop"}]}
+            )
 
         payload = {
             "choices": [
@@ -207,9 +273,7 @@ class Handler(BaseHTTPRequestHandler):
                     "message": {
                         "content": content,
                         "logprobs": {
-                            "content": [
-                                {"top_logprobs": [{"logprob": -0.05}, {"logprob": -0.4}]}
-                            ]
+                            "content": [{"top_logprobs": [{"logprob": -0.05}, {"logprob": -0.4}]}]
                             * 12
                         },
                     },

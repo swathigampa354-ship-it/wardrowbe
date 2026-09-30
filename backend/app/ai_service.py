@@ -32,7 +32,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
-from app.prompts import CLOTHING_PROMPT, CLOTHING_DESCRIPTION_PROMPT
+from app.prompts import CLOTHING_DESCRIPTION_PROMPT, CLOTHING_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -64,29 +64,103 @@ class AIResponseTruncatedError(AIError):
 
 
 VALID_TYPES = {
-    "shirt", "t-shirt", "top", "polo", "blouse", "tank-top", "sweater", "cardigan",
-    "hoodie", "knit", "pants", "jeans", "shorts", "skirt", "dress", "jumpsuit",
-    "blazer", "jacket", "coat", "vest", "shoes", "sneakers", "boots", "sandals",
-    "hat", "scarf", "belt", "tie", "socks", "bag", "accessories",
+    "shirt",
+    "t-shirt",
+    "top",
+    "polo",
+    "blouse",
+    "tank-top",
+    "sweater",
+    "cardigan",
+    "hoodie",
+    "knit",
+    "pants",
+    "jeans",
+    "shorts",
+    "skirt",
+    "dress",
+    "jumpsuit",
+    "blazer",
+    "jacket",
+    "coat",
+    "vest",
+    "shoes",
+    "sneakers",
+    "boots",
+    "sandals",
+    "hat",
+    "scarf",
+    "belt",
+    "tie",
+    "socks",
+    "bag",
+    "accessories",
 }
 VALID_COLORS = {
-    "black", "white", "gray", "grey", "navy", "blue", "light-blue", "red", "burgundy",
-    "pink", "green", "olive", "yellow", "orange", "purple", "brown", "tan", "beige",
-    "cream", "gold", "silver",
+    "black",
+    "white",
+    "gray",
+    "grey",
+    "navy",
+    "blue",
+    "light-blue",
+    "red",
+    "burgundy",
+    "pink",
+    "green",
+    "olive",
+    "yellow",
+    "orange",
+    "purple",
+    "brown",
+    "tan",
+    "beige",
+    "cream",
+    "gold",
+    "silver",
 }
 VALID_PATTERNS = {
-    "solid", "striped", "plaid", "checkered", "floral", "graphic", "geometric",
-    "polka-dot", "camouflage", "animal-print",
+    "solid",
+    "striped",
+    "plaid",
+    "checkered",
+    "floral",
+    "graphic",
+    "geometric",
+    "polka-dot",
+    "camouflage",
+    "animal-print",
 }
 VALID_MATERIALS = {
-    "cotton", "denim", "leather", "wool", "polyester", "silk", "linen", "knit",
-    "fleece", "suede", "velvet", "nylon", "canvas",
+    "cotton",
+    "denim",
+    "leather",
+    "wool",
+    "polyester",
+    "silk",
+    "linen",
+    "knit",
+    "fleece",
+    "suede",
+    "velvet",
+    "nylon",
+    "canvas",
 }
 VALID_FORMALITY = {"very-casual", "casual", "smart-casual", "business-casual", "formal"}
 VALID_FIT = {"slim", "regular", "relaxed", "oversized", "tailored", "cropped"}
 VALID_STYLES = {
-    "casual", "classic", "sporty", "minimalist", "bohemian", "preppy", "streetwear",
-    "elegant", "athletic", "vintage", "modern", "rugged",
+    "casual",
+    "classic",
+    "sporty",
+    "minimalist",
+    "bohemian",
+    "preppy",
+    "streetwear",
+    "elegant",
+    "athletic",
+    "vintage",
+    "modern",
+    "rugged",
 }
 VALID_SEASONS = {"spring", "summer", "fall", "autumn", "winter", "all-season"}
 
@@ -164,7 +238,11 @@ def extract_json(text: str) -> Any:
     stripped = text.strip()
 
     def _try(candidate: str) -> Any | None:
-        for prepared in (candidate, re.sub(r"//[^\n]*", "", candidate), re.sub(r"/\*[\s\S]*?\*/", "", candidate)):
+        for prepared in (
+            candidate,
+            re.sub(r"//[^\n]*", "", candidate),
+            re.sub(r"/\*[\s\S]*?\*/", "", candidate),
+        ):
             try:
                 return json.loads(prepared)
             except json.JSONDecodeError:
@@ -224,7 +302,8 @@ def confidence_from_logprobs(logprobs_content: list[dict] | None) -> float | Non
     scores = [
         top["logprob"]
         for token in logprobs_content
-        if (top := (token.get("top_logprobs") or [None])[0]) and isinstance(top.get("logprob"), (int, float))
+        if (top := (token.get("top_logprobs") or [None])[0])
+        and isinstance(top.get("logprob"), (int, float))
     ]
     if not scores:
         return None
@@ -299,7 +378,9 @@ class AIService:
             "max_tokens": self.settings.ai_max_tokens,
             **extra,
         }
-        response = await client.post(f"{self.base_url}/chat/completions", headers=self._headers(), json=body)
+        response = await client.post(
+            f"{self.base_url}/chat/completions", headers=self._headers(), json=body
+        )
         if response.status_code >= 400:
             detail = ""
             try:
@@ -327,10 +408,15 @@ class AIService:
     ) -> tuple[str, list[dict] | None]:
         self._require_configured()
         if not models:
-            raise AINotConfiguredError("No AI model configured. Set AI_MODEL in the server environment.")
+            raise AINotConfiguredError(
+                "No AI model configured. Set AI_MODEL in the server environment."
+            )
 
         last_error: Exception | None = None
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user_content}]
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
+        ]
 
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             for model in models:
@@ -352,10 +438,13 @@ class AIService:
                         data = await self._post_once(client, model, messages, extra)
                     except httpx.TimeoutException:
                         last_error = AIResponseError(
-                            f"The AI provider took longer than {self.timeout}s to answer. Try again."
+                            f"The AI provider took longer than {self.timeout}s to answer. "
+                            "Try again."
                         )
                         break  # slow provider: switch model rather than retry it
-                    except httpx.HTTPStatusError as exc:  # pragma: no cover - raised by raise_for_status
+                    except (
+                        httpx.HTTPStatusError
+                    ) as exc:  # pragma: no cover - raised by raise_for_status
                         last_error = _ProviderError(str(exc), exc.response.status_code)
                     except _ProviderError as exc:
                         # Optional request params are negotiated, not assumed. A
@@ -368,20 +457,31 @@ class AIService:
                             exc.message.lower().startswith("unsupported parameter")
                             or any(
                                 needle in exc.message.lower()
-                                for needle in ("logprobs", "logprob", "reasoning_effort", "reasoning")
+                                for needle in (
+                                    "logprobs",
+                                    "logprob",
+                                    "reasoning_effort",
+                                    "reasoning",
+                                )
                             )
                         )
                         if optional_rejection and use_logprobs:
-                            logger.info("%s: provider rejected optional params, dropping logprobs", task)
+                            logger.info(
+                                "%s: provider rejected optional params, dropping logprobs", task
+                            )
                             use_logprobs = False
                             continue  # not counted as a retry
                         if optional_rejection and use_reasoning:
-                            logger.info("%s: provider rejected optional params, dropping reasoning_effort", task)
+                            logger.info(
+                                "%s: provider rejected optional params, dropping reasoning_effort",
+                                task,
+                            )
                             use_reasoning = False
                             continue  # not counted as a retry
                         if exc.status_code == 401:
                             raise AIResponseError(
-                                "The AI provider rejected the API key (401). Check AI_API_KEY on the server."
+                                "The AI provider rejected the API key (401). "
+                                "Check AI_API_KEY on the server."
                             ) from None
                         if exc.status_code == 403:
                             raise AIResponseError(
@@ -402,7 +502,8 @@ class AIService:
                             break
                         if exc.status_code in (500, 502, 503, 504):
                             last_error = AIResponseError(
-                                f"The AI provider is unavailable ({exc.status_code}). Try again shortly."
+                                f"The AI provider is unavailable ({exc.status_code}). "
+                                "Try again shortly."
                             )
                         else:
                             last_error = AIResponseError(f"AI provider error: {exc.message}")
@@ -423,7 +524,9 @@ class AIService:
                                 "Raise AI_MAX_TOKENS or use a model with a longer output budget."
                             )
                             break
-                        return (content or "").strip(), (message.get("logprobs") or {}).get("content")
+                        return (content or "").strip(), (message.get("logprobs") or {}).get(
+                            "content"
+                        )
 
                     # Only reached after a real failure: counted and backed off.
                     attempt += 1
@@ -468,7 +571,9 @@ class AIService:
             tags.unrecognized_type = reported_type[:100]
 
         subtype = payload.get("subtype")
-        tags.subtype = subtype.strip()[:50] if isinstance(subtype, str) and subtype.strip() else None
+        tags.subtype = (
+            subtype.strip()[:50] if isinstance(subtype, str) and subtype.strip() else None
+        )
         tags.primary_color = _clean(payload.get("primary_color"), VALID_COLORS)
         tags.colors = _clean_list(payload.get("colors"), VALID_COLORS, limit=5)
         if tags.primary_color and tags.primary_color not in tags.colors:
@@ -513,8 +618,14 @@ class AIService:
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
                 response = await client.get(f"{self.base_url}/models", headers=self._headers())
             if response.status_code < 400:
-                return {"status": "ok", "detail": f"{self.base_url} reachable ({response.status_code})"}
-            return {"status": "degraded", "detail": f"{self.base_url} returned {response.status_code}"}
+                return {
+                    "status": "ok",
+                    "detail": f"{self.base_url} reachable ({response.status_code})",
+                }
+            return {
+                "status": "degraded",
+                "detail": f"{self.base_url} returned {response.status_code}",
+            }
         except Exception as exc:  # noqa: BLE001
             return {"status": "unreachable", "detail": f"{self.base_url}: {exc}"}
 

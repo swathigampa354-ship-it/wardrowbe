@@ -34,6 +34,8 @@ generation returns a readable 503 telling you which variable to set.
 | `docs/architecture.md` | Request-flow diagram + why each removal was safe. |
 | `docs/free-tier-limits.md` | What genuinely does not work on a free tier, and the honest workaround. |
 | `docs/strip-plan.md` | Removed vs retained, component by component. |
+| `docker-compose.yml` | One service, one port, same image as production. |
+| `.github/workflows/` | CI for this tree only (lint + tests + e2e + image smoke test). |
 
 ## Running it
 
@@ -48,6 +50,12 @@ docker run --rm -p 10000:10000 --env-file .env wardrowbe-trial
 `STORAGE_DIR` defaults to `/data/wardrobe`, which is container-local and **ephemeral** — exactly
 like Render Free. Mount a volume (`-v $PWD/storage:/data/wardrobe`) if you want the demo to
 survive a restart of the container.
+
+With compose (same single service, plus a bind mount so a rebuild keeps your photos):
+
+```bash
+AI_API_KEY=*** docker compose up --build
+```
 
 ### Without Docker
 
@@ -67,17 +75,24 @@ cd frontend && npm ci && BACKEND_URL=http://127.0.0.1:8000 npm run dev
 
 ```bash
 cd backend
-python3 -m pytest        # 18 tests: AI failure modes, image validation, CORS, SQLite concurrency
-python3 -m tests.e2e     # 59 checks: upload → tag → edit → re-analyze → 3 outfits → accept → cleanup
+python3 -m pytest        # 19 tests: AI failure modes, image validation, CORS, SQLite concurrency
+python3 -m tests.e2e     # 62 checks: upload → tag → edit → re-analyze → 3 outfits → accept → cleanup
 cd ../frontend
 npx tsc --noEmit         # type-clean against the stripped API
 npx next build           # production build (type + lint errors fail the build)
+npm run i18n:check       # every t() call site resolves against messages/en/
+cd ../backend && python3 -m tests.preview_stack   # stub provider + API :8000 + built UI :3000
 ```
 
 `tests/e2e` and `tests/test_ai_failures.py` run against a stdlib stub provider
 (`backend/tests/fake_provider.py`) — no network, no API key, no quota. That stub is also what
 makes the failure-path tests real: bad key, rate limit, truncated JSON, non-JSON, timeouts,
 out-of-vocabulary clothing types.
+
+`.github/workflows/ci.yml` runs exactly those four commands, plus `ruff check`/`ruff format
+--check` on the backend and a `docker build` of the root image with a smoke test that starts the
+container and requires both `/` and `/api/v1/capabilities` to answer. `docker-publish.yml` is manual
+(`workflow_dispatch`) — the trial is one image, not a four-image registry matrix.
 
 ## The demo flow, in order
 

@@ -1,0 +1,85 @@
+name: Docker Publish
+
+# One image now, and it is the whole app (UI + API). Upstream published four
+# multi-arch images on every release for a 6-service topology; none of that
+# applies here, and a failed publish job on `main` is just noise. So: run this
+# manually when you actually want a registry artifact, and it also runs on a
+# release if you keep using releases.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag to apply
+        default: trial-latest
+      push:
+        description: Push to GHCR (otherwise build + smoke test only)
+        type: boolean
+        default: false
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Build the trial image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      main-tag: ${{ steps.meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v3
+        if: github.event_name == 'release' || inputs.push
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}/trial
+          tags: |
+            type=raw,value=${{ inputs.tag || github.ref_name }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'release' || inputs.push }}
+          # workflow_dispatch without push keeps the image loaded in the
+          # runner's daemon, which is what the smoke test below needs.
+          load: ${{ github.event_name == 'workflow_dispatch' && !inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=trial
+          cache-to: type=gha,mode=max,scope=trial
+
+      # The trial's whole claim is "one container serves the UI and the API", so
+      # prove it before calling it publishable: start the image and require both
+      # `/` (Next) and `/api/v1/capabilities` (FastAPI, through the UI's proxy).
+      - name: Smoke test the image
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          tag="$(printf '%s' '${{ steps.meta.outputs.tags }}' | head -1)"
+          echo "smoke testing $tag"
+          docker run -d --name smoke -p 10000:10000 "$tag"
+          ui=""
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:10000/ >/dev/null 2>&1; then ui=1; break; fi
+            sleep 2
+          done
+          api=""
+          for _ in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:10000/api/v1/capabilities >/dev/null 2>&1; then api=1; break; fi
+            sleep 2
+          done
+          docker logs smoke 2>&1 | tail -40
+          docker rm -f smoke >/dev/null 2>&1 || true
+          if [ -z "$ui" ] || [ -z "$api" ]; then
+            echo "image did not serve / (ui=$ui) or /api/v1/capabilities (api=$api)"
+            exit 1
+          fi
