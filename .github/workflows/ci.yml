@@ -94,7 +94,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/actionlint
+      # Pinned action instead of upstream's `docker run rhysd/actionlint`: same
+      # image, no assumption that a runner job may start containers.
+      - uses: rhysd/actionlint@v1.7.12
 
   docker:
     name: Docker image builds
