@@ -16,7 +16,10 @@
 # =============================================================================
 
 # --- UI build -----------------------------------------------------------------
-FROM node:24-alpine AS ui
+# node:24-slim (Debian), not node:24-alpine: the `node` binary this stage ships is
+# copied into the Debian runtime below, and alpine's is linked against musl, so it
+# would not execute there. Same Node (v24.x), same npm, glibc all the way down.
+FROM node:24-slim AS ui
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 # Build deps only; the runtime image gets none of node_modules except the
@@ -52,6 +55,12 @@ COPY --from=ui /app/.next/static/ /app/frontend/.next/static/
 COPY --from=ui /app/public/ /app/frontend/public/
 # next-intl loads messages via a dynamic import; keep the JSON next to the server.
 COPY --from=ui /app/messages/ /app/frontend/messages/
+# The standalone server.js needs a Node runtime, and this stage's base has none.
+# Reuse the exact Node from the builder instead of apt-ing NodeSource in: one file,
+# no extra list, no network at build time. node:24-slim is Debian 12 (glibc 2.36,
+# libstdc++ 6.0.30) and python:3.12-slim is Debian 13 (glibc 2.41, libstdc++
+# 6.0.33), so the binary resolves against what the runtime already ships.
+COPY --from=ui /usr/local/bin/node /usr/local/bin/node
 
 RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /data/wardrobe \
