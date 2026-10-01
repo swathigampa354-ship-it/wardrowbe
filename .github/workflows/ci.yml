@@ -94,9 +94,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Pinned action instead of upstream's `docker run rhysd/actionlint`: same
-      # image, no assumption that a runner job may start containers.
-      - uses: rhysd/actionlint@v1.7.12
+      # Neither shape upstream used (docker run) nor rhysd's own composite
+      # action is reliable here - the latter compiles itself with Go in a
+      # container and its `-ldflags` is broken under buildkit quoting. The
+      # release tarball is a static binary: no container, no compile.
+      - name: Install actionlint
+        run: |
+          curl -fsSLO https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          tar -xzf actionlint_1.7.12_linux_amd64.tar.gz actionlint
+          echo "$PWD" >> "$GITHUB_PATH"
+      - name: Run actionlint
+        run: actionlint -color
 
   docker:
     name: Docker image builds
@@ -109,19 +117,33 @@ jobs:
         with:
           context: .
           push: false
+          # Without `load` the image only exists in the buildx cache and the
+          # smoke test below would try to pull `wardrowbe-trial:ci` from Docker
+          # Hub (403 on a private name). `load` exports it into the daemon.
+          load: true
           tags: wardrowbe-trial:ci
           cache-from: type=gha,scope=trial
           cache-to: type=gha,mode=max,scope=trial
 
-      # Fails loudly if the runtime image cannot answer: the container starts
-      # the UI and the API, so this is the closest thing to a smoke test.
-      - name: Boot the image and hit /healthz
+      # Fails loudly if the runtime image cannot answer. Both checks go through
+      # the public port: the API is loopback-only inside the container, so
+      # /api/v1/capabilities answering *through the UI proxy* proves the pair
+      # and the supervisor work, which is the whole claim of this Dockerfile.
+      - name: Boot the image and hit / and /api/v1/capabilities
         run: |
-          docker run -d --rm --name trial-ci -p 10000:10000 wardrowbe-trial:ci
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:10000/ >/dev/null; then ok=1; break; fi
+          docker run -d --name trial-ci -p 10000:10000 wardrowbe-trial:ci
+          ui=""; api=""
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:10000/ >/dev/null 2>&1; then ui=1; break; fi
             sleep 2
           done
-          docker logs trial-ci || true
+          for _ in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:10000/api/v1/capabilities >/dev/null 2>&1; then api=1; break; fi
+            sleep 2
+          done
+          docker logs trial-ci 2>&1 | tail -40
           docker rm -f trial-ci >/dev/null 2>&1 || true
-          test -n "$ok" || { echo "container never served /"; exit 1; }
+          if [ -z "$ui" ] || [ -z "$api" ]; then
+            echo "container served / = ${ui:-no}, /api/v1/capabilities = ${api:-no}"
+            exit 1
+          fi
